@@ -1,0 +1,174 @@
+---
+- name: Targeted FRR compliance remediation
+  hosts: "{{ target_device | default('__invalid_target__') }}"
+  gather_facts: false
+  serial: 1
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+
+  tasks:
+
+    - name: Validate remediation inputs
+      ansible.builtin.assert:
+        that:
+          - target_device is defined
+          - target_device | length > 0
+          - violations is defined
+          - violations | length > 0
+          - target_device in network_intent
+        fail_msg: "Invalid remediation request"
+
+    - name: Load intended configuration
+      ansible.builtin.set_fact:
+        intent: "{{ network_intent[target_device] }}"
+
+    - name: Determine requested remediation controls
+      ansible.builtin.set_fact:
+        requested_controls: >-
+          {{
+            violations
+            | map(attribute='control')
+            | list
+            | unique
+          }}
+
+    - name: Reject unsupported remediation controls
+      ansible.builtin.assert:
+        that:
+          - >-
+            requested_controls
+            | difference([
+                'bgp_neighbor_configuration',
+                'maximum_paths'
+              ])
+            | length == 0
+        fail_msg: >-
+          Refusing remediation because unsupported controls were supplied:
+          {{
+            requested_controls
+            | difference([
+                'bgp_neighbor_configuration',
+                'maximum_paths'
+              ])
+          }}
+        success_msg: "All requested remediation controls are supported"
+
+    - name: Capture pre-change running configuration
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: prechange_config
+      changed_when: false
+
+    - name: Capture pre-change BGP state
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: prechange_bgp
+      changed_when: false
+
+    - name: Remediate BGP neighbor configuration
+      ansible.builtin.raw: >
+        vtysh
+        -c 'configure terminal'
+        -c 'router bgp {{ intent.asn }}'
+        -c 'neighbor {{ item.neighbor }} remote-as {{ item.expected_remote_as }}'
+        -c 'neighbor {{ item.neighbor }} description {{ item.expected_description }}'
+        -c 'end'
+      loop: >-
+        {{
+          violations
+          | selectattr('control', 'equalto', 'bgp_neighbor_configuration')
+          | list
+        }}
+      when: item.neighbor is defined
+      changed_when: true
+
+    - name: Remediate ECMP maximum paths
+      ansible.builtin.raw: >
+        vtysh
+        -c 'configure terminal'
+        -c 'router bgp {{ intent.asn }}'
+        -c 'address-family ipv4 unicast'
+        -c 'maximum-paths {{ item.expected }}'
+        -c 'end'
+      loop: >-
+        {{
+          violations
+          | selectattr('control', 'equalto', 'maximum_paths')
+          | list
+        }}
+      changed_when: true
+
+    - name: Capture post-change running configuration
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: postchange_config
+      changed_when: false
+
+    - name: Capture post-change BGP state
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: postchange_bgp
+      changed_when: false
+
+    - name: Validate remediated BGP neighbor configurations
+      ansible.builtin.assert:
+        that:
+          - >-
+            'neighbor ' ~ item.neighbor ~
+            ' remote-as ' ~ (item.expected_remote_as | string)
+            in postchange_config.stdout
+          - >-
+            'neighbor ' ~ item.neighbor ~
+            ' description ' ~ item.expected_description
+            in postchange_config.stdout
+        fail_msg: "Post-remediation validation failed for BGP neighbor {{ item.neighbor }}"
+        success_msg: "BGP neighbor {{ item.neighbor }} remediation validated"
+      loop: >-
+        {{
+          violations
+          | selectattr('control', 'equalto', 'bgp_neighbor_configuration')
+          | list
+        }}
+
+    - name: Validate remediated maximum paths
+      ansible.builtin.assert:
+        that:
+          - >-
+            'maximum-paths ' ~ (item.expected | string)
+            in postchange_config.stdout
+        fail_msg: "Post-remediation maximum-paths validation failed"
+        success_msg: "maximum-paths remediation validated"
+      loop: >-
+        {{
+          violations
+          | selectattr('control', 'equalto', 'maximum_paths')
+          | list
+        }}
+
+    - name: Validate BGP remains operational
+      ansible.builtin.assert:
+        that:
+          - "'Idle' not in postchange_bgp.stdout"
+          - "'Active' not in postchange_bgp.stdout"
+          - "'Connect' not in postchange_bgp.stdout"
+        fail_msg: "BGP operational validation failed after remediation"
+        success_msg: "BGP remained operational after remediation"
+
+    - name: Publish remediation result
+      ansible.builtin.set_stats:
+        data:
+          remediation_result:
+            device: "{{ target_device }}"
+            status: REMEDIATED
+            controls: "{{ requested_controls }}"
+            violation_count: "{{ violations | length }}"
+        per_host: false
+
+    - name: Display remediation result
+      ansible.builtin.debug:
+        msg:
+          device: "{{ target_device }}"
+          status: REMEDIATED
+          controls: "{{ requested_controls }}"
+          violations_remediated: "{{ violations | length }}"
