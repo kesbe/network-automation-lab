@@ -1,0 +1,339 @@
+---
+- name: Restore FRR configuration from an immutable Git revision
+  hosts: all
+  gather_facts: false
+  any_errors_fatal: true
+  serial: 1
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+
+  vars:
+    backup_repo_url: "https://github.com/kesbe/network-config-backups.git"
+
+    backup_repo_dir: "/tmp/nw04-backup-repo-{{ target_device | default('invalid') }}"
+    git_askpass_file: "/tmp/nw04-git-askpass-{{ target_device | default('invalid') }}.sh"
+
+    restore_dir: "/tmp/nw04-restore-{{ target_device | default('invalid') }}"
+    candidate_file: "{{ restore_dir }}/candidate.conf"
+    prechange_file: "{{ restore_dir }}/prechange.conf"
+    postchange_file: "{{ restore_dir }}/postchange.conf"
+
+  tasks:
+
+    - name: Validate NW04 restore request
+      ansible.builtin.assert:
+        that:
+          - (target_device | default('')) | length > 0
+          - (target_device | default('')) in network_intent
+          - inventory_hostname == (target_device | default(''))
+          - (restore_commit | default('')) is match('^[0-9a-fA-F]{40}$')
+          - confirm_restore | default(false) | bool
+        fail_msg: >-
+          Refusing restore. Require a valid target_device,
+          full 40-character Git commit SHA, matching AWX limit,
+          and confirm_restore=true.
+        success_msg: "NW04 restore request validated"
+
+    - name: Load intended device information
+      ansible.builtin.set_fact:
+        intent: "{{ network_intent[target_device] }}"
+
+    - name: Verify FRR restore utilities exist
+      ansible.builtin.raw: >
+        test -x /usr/lib/frr/frr-reload.py &&
+        command -v vtysh >/dev/null &&
+        command -v base64 >/dev/null
+      changed_when: false
+
+    - name: Verify Git backup credential injection
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GIT_BACKUP_USERNAME') | length > 0
+          - lookup('env', 'GIT_BACKUP_TOKEN') | length > 0
+        fail_msg: "Git backup credentials are unavailable"
+        success_msg: "Git backup credentials are available"
+      delegate_to: localhost
+      no_log: true
+
+    - name: Remove previous temporary Git repository
+      ansible.builtin.file:
+        path: "{{ backup_repo_dir }}"
+        state: absent
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Create Git askpass helper
+      ansible.builtin.shell: |
+        cat > "{{ git_askpass_file }}" <<'SH'
+        #!/bin/sh
+        case "$1" in
+          *Username*|*username*)
+            printf '%s\n' "$GIT_BACKUP_USERNAME"
+            ;;
+          *Password*|*password*)
+            printf '%s\n' "$GIT_BACKUP_TOKEN"
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+        SH
+
+        chmod 700 "{{ git_askpass_file }}"
+      args:
+        executable: /bin/sh
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Clone configuration backup repository
+      ansible.builtin.command:
+        argv:
+          - git
+          - clone
+          - "{{ backup_repo_url }}"
+          - "{{ backup_repo_dir }}"
+      environment:
+        GIT_ASKPASS: "{{ git_askpass_file }}"
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_BACKUP_USERNAME: "{{ lookup('env', 'GIT_BACKUP_USERNAME') }}"
+        GIT_BACKUP_TOKEN: "{{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
+      delegate_to: localhost
+      changed_when: false
+      no_log: true
+
+    - name: Verify requested Git commit exists
+      ansible.builtin.shell: |
+        set -eu
+        git -C "{{ backup_repo_dir }}" \
+          cat-file -e "{{ restore_commit }}^{commit}"
+      args:
+        executable: /bin/sh
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Verify configuration exists at requested revision
+      ansible.builtin.shell: |
+        set -eu
+        git -C "{{ backup_repo_dir }}" \
+          cat-file -e \
+          "{{ restore_commit }}:configs/{{ target_device }}/running.conf"
+      args:
+        executable: /bin/sh
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Calculate Git candidate SHA256
+      ansible.builtin.shell: |
+        set -eu
+        git -C "{{ backup_repo_dir }}" \
+          show \
+          "{{ restore_commit }}:configs/{{ target_device }}/running.conf" |
+        sha256sum |
+        awk '{print $1}'
+      args:
+        executable: /bin/sh
+      register: candidate_sha256
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Encode Git candidate configuration
+      ansible.builtin.shell: |
+        set -eu
+        git -C "{{ backup_repo_dir }}" \
+          show \
+          "{{ restore_commit }}:configs/{{ target_device }}/running.conf" |
+        base64 -w0
+      args:
+        executable: /bin/sh
+      register: candidate_b64
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Remove Git authentication helper
+      ansible.builtin.file:
+        path: "{{ git_askpass_file }}"
+        state: absent
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Remove temporary Git repository
+      ansible.builtin.file:
+        path: "{{ backup_repo_dir }}"
+        state: absent
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Create remote restore workspace and candidate
+      ansible.builtin.raw: >
+        mkdir -p '{{ restore_dir }}' &&
+        chmod 700 '{{ restore_dir }}' &&
+        printf '%s' '{{ candidate_b64.stdout }}' |
+        base64 -d > '{{ candidate_file }}' &&
+        chmod 600 '{{ candidate_file }}'
+      changed_when: false
+
+    - name: Verify candidate belongs to requested device
+      ansible.builtin.raw: >
+        grep -Fx
+        'hostname {{ target_device }}'
+        '{{ candidate_file }}'
+      changed_when: false
+
+    - name: Validate candidate with FRR parser
+      ansible.builtin.raw: >
+        vtysh -C -f '{{ candidate_file }}'
+      register: candidate_validation
+      changed_when: false
+      failed_when: candidate_validation.rc != 0
+
+    - name: Capture pre-restore configuration
+      ansible.builtin.raw: |
+        vtysh -c 'show running-config' |
+        sed \
+          -e '/^Building configuration/d' \
+          -e '/^Current configuration:/d' \
+          > '{{ prechange_file }}'
+
+        sha256sum '{{ prechange_file }}'
+      register: prechange_sha256
+      changed_when: false
+
+    - name: Calculate restore delta
+      ansible.builtin.raw: >
+        /usr/lib/frr/frr-reload.py
+        --test
+        --stdout
+        --logfile '{{ restore_dir }}/frr-reload-test.log'
+        --rundir '{{ restore_dir }}'
+        '{{ candidate_file }}'
+      register: restore_dryrun
+      changed_when: false
+      failed_when: restore_dryrun.rc != 0
+
+    - name: Display calculated restore delta
+      ansible.builtin.debug:
+        msg: "{{ restore_dryrun.stdout_lines | default([]) }}"
+
+    - name: Determine whether restore is required
+      ansible.builtin.set_fact:
+        restore_delta_required: >-
+          {{
+            ('Lines To Add' in (restore_dryrun.stdout | default(''))) or
+            ('Lines To Delete' in (restore_dryrun.stdout | default('')))
+          }}
+
+    - name: Display restore decision
+      ansible.builtin.debug:
+        msg: >-
+          {{ target_device }} restore required =
+          {{ restore_delta_required }}
+
+    - name: Apply Git configuration restore
+      ansible.builtin.raw: >
+        /usr/lib/frr/frr-reload.py
+        --reload
+        --stdout
+        --logfile '{{ restore_dir }}/frr-reload.log'
+        --rundir '{{ restore_dir }}'
+        '{{ candidate_file }}'
+      register: restore_apply
+      when: restore_delta_required | bool
+      changed_when: true
+      failed_when: restore_apply.rc != 0
+
+    - name: Verify zero remaining configuration delta
+      ansible.builtin.raw: >
+        /usr/lib/frr/frr-reload.py
+        --test
+        --stdout
+        --logfile '{{ restore_dir }}/frr-reload-post-test.log'
+        --rundir '{{ restore_dir }}'
+        '{{ candidate_file }}'
+      register: post_restore_delta
+      changed_when: false
+      failed_when: post_restore_delta.rc != 0
+
+    - name: Assert restore converged to Git configuration
+      ansible.builtin.assert:
+        that:
+          - "'Lines To Add' not in (post_restore_delta.stdout | default(''))"
+          - "'Lines To Delete' not in (post_restore_delta.stdout | default(''))"
+        fail_msg: >-
+          Restore failed convergence validation.
+          Configuration delta remains after frr-reload.
+        success_msg: "Post-restore configuration delta is zero"
+
+    - name: Capture post-restore configuration
+      ansible.builtin.raw: |
+        vtysh -c 'show running-config' |
+        sed \
+          -e '/^Building configuration/d' \
+          -e '/^Current configuration:/d' \
+          > '{{ postchange_file }}'
+
+        sha256sum '{{ postchange_file }}'
+      register: postchange_sha256
+      changed_when: false
+
+    - name: Collect post-restore BGP state
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: post_restore_bgp
+      changed_when: false
+
+    - name: Verify expected BGP neighbors remain present
+      ansible.builtin.assert:
+        that:
+          - item.ip in post_restore_bgp.stdout
+        fail_msg: >-
+          Expected BGP neighbor {{ item.ip }}
+          is missing after restore.
+        success_msg: >-
+          Expected BGP neighbor {{ item.ip }}
+          is present after restore.
+      loop: "{{ intent.bgp_neighbors }}"
+
+    - name: Verify BGP has no failed session states
+      ansible.builtin.assert:
+        that:
+          - "'Idle' not in post_restore_bgp.stdout"
+          - "'Active' not in post_restore_bgp.stdout"
+          - "'Connect' not in post_restore_bgp.stdout"
+        fail_msg: "BGP operational validation failed after restore"
+        success_msg: "BGP remained operational after restore"
+
+    - name: Publish NW04 restore artifact
+      ansible.builtin.set_stats:
+        data:
+          restore_result:
+            device: "{{ target_device }}"
+            restore_commit: "{{ restore_commit }}"
+            status: >-
+              {{
+                'RESTORED'
+                if restore_delta_required | bool
+                else 'NO_CHANGE'
+              }}
+            delta_required: "{{ restore_delta_required }}"
+            candidate_sha256: "{{ candidate_sha256.stdout | trim }}"
+            prechange_sha256: "{{ prechange_sha256.stdout.split()[0] }}"
+            postchange_sha256: "{{ postchange_sha256.stdout.split()[0] }}"
+            bgp_status: HEALTHY
+        per_host: false
+
+    - name: Display NW04 restore result
+      ansible.builtin.debug:
+        msg:
+          device: "{{ target_device }}"
+          restore_commit: "{{ restore_commit }}"
+          status: >-
+            {{
+              'RESTORED'
+              if restore_delta_required | bool
+              else 'NO_CHANGE'
+            }}
+          candidate_sha256: "{{ candidate_sha256.stdout | trim }}"
+          prechange_sha256: "{{ prechange_sha256.stdout.split()[0] }}"
+          postchange_sha256: "{{ postchange_sha256.stdout.split()[0] }}"
+          bgp_status: HEALTHY
