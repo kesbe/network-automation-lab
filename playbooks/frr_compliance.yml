@@ -1,5 +1,5 @@
 ---
-- name: Validate FRR configuration compliance
+- name: FRR multi-control configuration compliance
   hosts: all
   gather_facts: false
 
@@ -8,9 +8,10 @@
 
   tasks:
 
-    - name: Load intended configuration for device
+    - name: Load intended configuration
       ansible.builtin.set_fact:
         intent: "{{ network_intent[inventory_hostname] }}"
+        compliance_violations: []
 
     - name: Collect running configuration
       ansible.builtin.raw: >
@@ -18,7 +19,7 @@
       register: running_config
       changed_when: false
 
-    - name: Collect BGP summary
+    - name: Collect BGP operational state
       ansible.builtin.raw: >
         vtysh -c 'show bgp ipv4 unicast summary'
       register: bgp_summary
@@ -32,79 +33,193 @@
             | regex_replace('\r', '')
           }}
 
-    - name: Validate hostname
-      ansible.builtin.assert:
-        that:
-          - "'hostname ' ~ intent.hostname in current_config"
-        fail_msg: "NON-COMPLIANT: hostname"
-        success_msg: "COMPLIANT: hostname"
+    - name: Record hostname violation
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'hostname',
+              'expected': intent.hostname,
+              'actual': 'missing or different'
+            }]
+          }}
+      when: "'hostname ' ~ intent.hostname not in current_config"
 
-    - name: Validate BGP ASN
-      ansible.builtin.assert:
-        that:
-          - "'router bgp ' ~ (intent.asn | string) in current_config"
-        fail_msg: "NON-COMPLIANT: BGP ASN"
-        success_msg: "COMPLIANT: BGP ASN"
+    - name: Record BGP ASN violation
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'bgp_asn',
+              'expected': intent.asn,
+              'actual': 'missing or different'
+            }]
+          }}
+      when: "'router bgp ' ~ (intent.asn | string) not in current_config"
 
-    - name: Validate BGP router ID
-      ansible.builtin.assert:
-        that:
-          - "'bgp router-id ' ~ intent.router_id in current_config"
-        fail_msg: "NON-COMPLIANT: BGP router ID"
-        success_msg: "COMPLIANT: BGP router ID"
+    - name: Record BGP router ID violation
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'bgp_router_id',
+              'expected': intent.router_id,
+              'actual': 'missing or different'
+            }]
+          }}
+      when: "'bgp router-id ' ~ intent.router_id not in current_config"
 
-    - name: Validate loopback address
-      ansible.builtin.assert:
-        that:
-          - "'ip address ' ~ intent.loopback in current_config"
-        fail_msg: "NON-COMPLIANT: loopback address"
-        success_msg: "COMPLIANT: loopback address"
+    - name: Record loopback address violation
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'loopback_address',
+              'expected': intent.loopback,
+              'actual': 'missing or different'
+            }]
+          }}
+      when: "'ip address ' ~ intent.loopback not in current_config"
 
-    - name: Validate physical interface addresses
-      ansible.builtin.assert:
-        that:
-          - "'interface ' ~ item.key in current_config"
-          - "'ip address ' ~ item.value in current_config"
-        fail_msg: "NON-COMPLIANT: {{ item.key }} {{ item.value }}"
-        success_msg: "COMPLIANT: {{ item.key }} {{ item.value }}"
+    - name: Record physical interface violations
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'interface_address',
+              'interface': item.key,
+              'expected': item.value,
+              'actual': 'missing or different'
+            }]
+          }}
       loop: "{{ intent.interfaces | dict2items }}"
+      when: >
+        ('interface ' ~ item.key not in current_config) or
+        ('ip address ' ~ item.value not in current_config)
 
-    - name: Validate configured BGP neighbors
-      ansible.builtin.assert:
-        that:
-          - "'neighbor ' ~ item.ip ~ ' remote-as ' ~ (item.remote_as | string) in current_config"
-          - "'neighbor ' ~ item.ip ~ ' description ' ~ item.description in current_config"
-        fail_msg: "NON-COMPLIANT: BGP neighbor {{ item.ip }}"
-        success_msg: "COMPLIANT: BGP neighbor {{ item.ip }}"
+    - name: Record BGP neighbor configuration violations
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'bgp_neighbor_configuration',
+              'neighbor': item.ip,
+              'expected_remote_as': item.remote_as,
+              'expected_description': item.description,
+              'actual': 'missing or different'
+            }]
+          }}
       loop: "{{ intent.bgp_neighbors }}"
+      when: >
+        ('neighbor ' ~ item.ip ~ ' remote-as ' ~ (item.remote_as | string)
+         not in current_config) or
+        ('neighbor ' ~ item.ip ~ ' description ' ~ item.description
+         not in current_config)
 
-    - name: Validate BGP neighbors are operational
-      ansible.builtin.assert:
-        that:
-          - "item.ip in bgp_summary.stdout"
-          - "'Idle' not in bgp_summary.stdout"
-          - "'Active' not in bgp_summary.stdout"
-          - "'Connect' not in bgp_summary.stdout"
-        fail_msg: "NON-COMPLIANT: BGP operational state"
-        success_msg: "COMPLIANT: BGP neighbor operational"
+    - name: Record BGP operational violations
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'bgp_neighbor_operational',
+              'neighbor': item.ip,
+              'expected': 'Established',
+              'actual': 'neighbor missing or not established'
+            }]
+          }}
       loop: "{{ intent.bgp_neighbors }}"
+      when: >
+        (item.ip not in bgp_summary.stdout) or
+        (
+          bgp_summary.stdout |
+          regex_search(
+            '(?m)^' ~
+            (item.ip | regex_escape) ~
+            '.*(?:Idle|Active|Connect)'
+          )
+        ) is not none
 
-    - name: Validate ECMP setting where required
-      ansible.builtin.assert:
-        that:
-          - "'maximum-paths ' ~ (intent.maximum_paths | string) in current_config"
-        fail_msg: "NON-COMPLIANT: maximum-paths"
-        success_msg: "COMPLIANT: maximum-paths"
-      when: intent.maximum_paths is defined
+    - name: Record ECMP maximum-paths violation
+      ansible.builtin.set_fact:
+        compliance_violations: >-
+          {{
+            compliance_violations +
+            [{
+              'control': 'maximum_paths',
+              'expected': intent.maximum_paths,
+              'actual': 'missing or different'
+            }]
+          }}
+      when:
+        - intent.maximum_paths is defined
+        - "'maximum-paths ' ~ (intent.maximum_paths | string) not in current_config"
 
-    - name: Publish compliance result
+    - name: Calculate compliance totals
+      ansible.builtin.set_fact:
+        compliance_total_checks: >-
+          {{
+            4
+            + (intent.interfaces | length)
+            + (intent.bgp_neighbors | length)
+            + (intent.bgp_neighbors | length)
+            + (1 if intent.maximum_paths is defined else 0)
+          }}
+        compliance_failed_checks: "{{ compliance_violations | length }}"
+
+    - name: Calculate final compliance state
+      ansible.builtin.set_fact:
+        compliance_passed_checks: >-
+          {{
+            (compliance_total_checks | int)
+            - (compliance_failed_checks | int)
+          }}
+        compliance_status: >-
+          {{
+            'COMPLIANT'
+            if (compliance_failed_checks | int) == 0
+            else 'NON-COMPLIANT'
+          }}
+
+    - name: Display compliance summary
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          status: "{{ compliance_status }}"
+          total_checks: "{{ compliance_total_checks }}"
+          passed: "{{ compliance_passed_checks }}"
+          failed: "{{ compliance_failed_checks }}"
+          violations: "{{ compliance_violations }}"
+
+    - name: Publish compliance result as AWX artifact
       ansible.builtin.set_stats:
         data:
           "compliance_{{ inventory_hostname }}":
             device: "{{ inventory_hostname }}"
-            status: COMPLIANT
+            status: "{{ compliance_status }}"
+            total_checks: "{{ compliance_total_checks }}"
+            passed: "{{ compliance_passed_checks }}"
+            failed: "{{ compliance_failed_checks }}"
+            violations: "{{ compliance_violations }}"
         per_host: false
 
-    - name: Display final device compliance result
+    - name: Display final device status
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }} = COMPLIANT"
+        msg: >-
+          {{ inventory_hostname }} =
+          {{ compliance_status }}
+          ({{ compliance_passed_checks }}/{{ compliance_total_checks }} checks passed)
+
+    - name: Fail job for non-compliant device
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} is NON-COMPLIANT.
+          {{ compliance_failed_checks }} compliance control(s) failed.
+          Violations: {{ compliance_violations }}
+      when: compliance_failed_checks | int > 0
