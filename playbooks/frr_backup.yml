@@ -40,7 +40,7 @@
             hostname: "{{ inventory_hostname }}"
             management_ip: "{{ ansible_host }}"
             sha256: "{{ config_sha256 }}"
-            configuration: "{{ normalized_config }}"
+            bytes: "{{ normalized_config | length }}"
         per_host: false
 
 
