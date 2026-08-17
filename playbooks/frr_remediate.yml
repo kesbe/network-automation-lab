@@ -1,7 +1,8 @@
 ---
 - name: Targeted FRR compliance remediation
-  hosts: "{{ target_device | default('__invalid_target__') }}"
+  hosts: all
   gather_facts: false
+  any_errors_fatal: true
   serial: 1
 
   vars_files:
