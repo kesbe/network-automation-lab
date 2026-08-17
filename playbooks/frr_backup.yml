@@ -1,5 +1,5 @@
 ---
-- name: FRR configuration backup
+- name: Collect FRR running configurations
   hosts: all
   gather_facts: false
 
@@ -25,7 +25,7 @@
       ansible.builtin.set_fact:
         config_sha256: "{{ normalized_config | hash('sha256') }}"
 
-    - name: Display backup metadata
+    - name: Display configuration metadata
       ansible.builtin.debug:
         msg:
           device: "{{ inventory_hostname }}"
@@ -33,7 +33,7 @@
           sha256: "{{ config_sha256 }}"
           bytes: "{{ normalized_config | length }}"
 
-    - name: Publish configuration backup as AWX artifact
+    - name: Publish configuration as AWX artifact
       ansible.builtin.set_stats:
         data:
           "backup_{{ inventory_hostname }}":
@@ -42,3 +42,181 @@
             sha256: "{{ config_sha256 }}"
             configuration: "{{ normalized_config }}"
         per_host: false
+
+
+- name: Store FRR configurations in Git
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    backup_repo_url: "https://github.com/kesbe/network-config-backups.git"
+    backup_repo_dir: "/tmp/network-config-backups"
+    askpass_file: "/tmp/git-backup-askpass.sh"
+
+  tasks:
+
+    - name: Run Git configuration backup workflow
+      block:
+
+        - name: Verify Git credential injection
+          ansible.builtin.assert:
+            that:
+              - lookup('env', 'GIT_BACKUP_USERNAME') | length > 0
+              - lookup('env', 'GIT_BACKUP_TOKEN') | length > 0
+            fail_msg: "Git backup credentials are unavailable"
+            success_msg: "Git backup credentials are available"
+
+        - name: Remove previous temporary repository
+          ansible.builtin.file:
+            path: "{{ backup_repo_dir }}"
+            state: absent
+          changed_when: false
+
+        - name: Create temporary Git askpass helper
+          ansible.builtin.copy:
+            dest: "{{ askpass_file }}"
+            mode: "0700"
+            content: |
+              #!/bin/sh
+              case "$1" in
+                *Username*)
+                  printf '%s\n' "$GIT_BACKUP_USERNAME"
+                  ;;
+                *Password*)
+                  printf '%s\n' "$GIT_BACKUP_TOKEN"
+                  ;;
+              esac
+          no_log: true
+          changed_when: false
+
+        - name: Clone network configuration backup repository
+          ansible.builtin.command:
+            argv:
+              - git
+              - clone
+              - --depth
+              - "1"
+              - "{{ backup_repo_url }}"
+              - "{{ backup_repo_dir }}"
+          environment:
+            GIT_ASKPASS: "{{ askpass_file }}"
+            GIT_TERMINAL_PROMPT: "0"
+          changed_when: false
+          no_log: true
+
+        - name: Configure Git commit identity
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - config
+              - user.name
+              - AWX Network Automation
+          changed_when: false
+
+        - name: Configure Git commit email
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - config
+              - user.email
+              - awx-network-automation@localhost
+          changed_when: false
+
+        - name: Create per-device backup directories
+          ansible.builtin.file:
+            path: "{{ backup_repo_dir }}/configs/{{ item }}"
+            state: directory
+            mode: "0755"
+          loop: "{{ groups['all'] }}"
+          changed_when: false
+
+        - name: Write normalized running configurations
+          ansible.builtin.copy:
+            content: "{{ hostvars[item].normalized_config | trim }}\n"
+            dest: "{{ backup_repo_dir }}/configs/{{ item }}/running.conf"
+            mode: "0644"
+          loop: "{{ groups['all'] }}"
+
+        - name: Check Git repository for configuration changes
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - status
+              - --porcelain
+          register: git_status
+          changed_when: false
+
+        - name: Display Git change status
+          ansible.builtin.debug:
+            msg: >-
+              {{
+                'Configuration changes detected - Git commit required'
+                if git_status.stdout | length > 0
+                else
+                'No configuration changes detected - Git commit skipped'
+              }}
+
+        - name: Stage configuration changes
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - add
+              - configs
+          when: git_status.stdout | length > 0
+          changed_when: true
+
+        - name: Commit configuration changes
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - commit
+              - -m
+              - "Automated FRR configuration backup"
+          when: git_status.stdout | length > 0
+          register: git_commit
+          changed_when: true
+
+        - name: Push configuration backup to GitHub
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ backup_repo_dir }}"
+              - push
+              - origin
+              - HEAD
+          environment:
+            GIT_ASKPASS: "{{ askpass_file }}"
+            GIT_TERMINAL_PROMPT: "0"
+          when: git_status.stdout | length > 0
+          changed_when: true
+          no_log: true
+
+        - name: Display backup result
+          ansible.builtin.debug:
+            msg: >-
+              {{
+                'Git backup committed and pushed successfully'
+                if git_status.stdout | length > 0
+                else
+                'Git repository already matches running configurations'
+              }}
+
+      always:
+
+        - name: Remove temporary credential helper
+          ansible.builtin.file:
+            path: "{{ askpass_file }}"
+            state: absent
+          changed_when: false
