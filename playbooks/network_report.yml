@@ -1,0 +1,94 @@
+---
+- name: Generate consolidated network automation report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+
+    - name: Build backup report
+      ansible.builtin.set_fact:
+        report_backup:
+          leaf01: "{{ backup_leaf01 | default({}) }}"
+          leaf02: "{{ backup_leaf02 | default({}) }}"
+          spine01: "{{ backup_spine01 | default({}) }}"
+          spine02: "{{ backup_spine02 | default({}) }}"
+
+    - name: Build compliance report
+      ansible.builtin.set_fact:
+        report_compliance:
+          leaf01: "{{ compliance_leaf01 | default({}) }}"
+          leaf02: "{{ compliance_leaf02 | default({}) }}"
+          spine01: "{{ compliance_spine01 | default({}) }}"
+          spine02: "{{ compliance_spine02 | default({}) }}"
+
+    - name: Load remediation result
+      ansible.builtin.set_fact:
+        report_remediation: "{{ remediation_result | default({}) }}"
+
+    - name: Load restore result
+      ansible.builtin.set_fact:
+        report_restore: "{{ restore_result | default({}) }}"
+
+    - name: Determine non-compliant devices
+      ansible.builtin.set_fact:
+        non_compliant_devices: >-
+          {{
+            report_compliance
+            | dict2items
+            | selectattr('value.status', 'defined')
+            | rejectattr('value.status', 'equalto', 'COMPLIANT')
+            | map(attribute='key')
+            | list
+          }}
+
+    - name: Determine overall report status
+      ansible.builtin.set_fact:
+        report_overall_status: >-
+          {{
+            'SUCCESS'
+            if (non_compliant_devices | length) == 0
+            else 'ATTENTION_REQUIRED'
+          }}
+
+    - name: Build consolidated report
+      ansible.builtin.set_fact:
+        network_automation_report:
+          report_type: NETWORK_AUTOMATION
+          overall_status: "{{ report_overall_status }}"
+          non_compliant_devices: "{{ non_compliant_devices }}"
+          backup: "{{ report_backup }}"
+          compliance: "{{ report_compliance }}"
+          remediation: "{{ report_remediation }}"
+          restore: "{{ report_restore }}"
+
+    - name: Display network automation summary
+      ansible.builtin.debug:
+        msg:
+          - "===== NETWORK AUTOMATION REPORT ====="
+          - "Overall status: {{ report_overall_status }}"
+          - "Non-compliant devices: {{ non_compliant_devices }}"
+          - >-
+            leaf01 compliance:
+            {{ report_compliance.leaf01.status | default('NOT_REPORTED') }}
+          - >-
+            leaf02 compliance:
+            {{ report_compliance.leaf02.status | default('NOT_REPORTED') }}
+          - >-
+            spine01 compliance:
+            {{ report_compliance.spine01.status | default('NOT_REPORTED') }}
+          - >-
+            spine02 compliance:
+            {{ report_compliance.spine02.status | default('NOT_REPORTED') }}
+          - >-
+            Remediation:
+            {{ report_remediation.status | default('NOT_RUN') }}
+          - >-
+            Restore:
+            {{ report_restore.status | default('NOT_RUN') }}
+
+    - name: Publish consolidated report artifact
+      ansible.builtin.set_stats:
+        data:
+          network_automation_report: "{{ network_automation_report }}"
+        per_host: false
