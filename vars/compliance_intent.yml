@@ -1,0 +1,83 @@
+---
+network_intent:
+
+  spine01:
+    hostname: spine01
+    asn: 65000
+    router_id: 10.255.0.1
+    loopback: 10.255.0.1/32
+
+    interfaces:
+      eth1: 10.0.0.0/31
+      eth2: 10.0.0.2/31
+
+    bgp_neighbors:
+      - ip: 10.0.0.1
+        remote_as: 65101
+        description: LEAF01
+
+      - ip: 10.0.0.3
+        remote_as: 65102
+        description: LEAF02
+
+
+  spine02:
+    hostname: spine02
+    asn: 65000
+    router_id: 10.255.0.2
+    loopback: 10.255.0.2/32
+
+    interfaces:
+      eth1: 10.0.0.4/31
+      eth2: 10.0.0.6/31
+
+    bgp_neighbors:
+      - ip: 10.0.0.5
+        remote_as: 65101
+        description: LEAF01
+
+      - ip: 10.0.0.7
+        remote_as: 65102
+        description: LEAF02
+
+
+  leaf01:
+    hostname: leaf01
+    asn: 65101
+    router_id: 10.255.1.1
+    loopback: 10.255.1.1/32
+    maximum_paths: 2
+
+    interfaces:
+      eth1: 10.0.0.1/31
+      eth2: 10.0.0.5/31
+
+    bgp_neighbors:
+      - ip: 10.0.0.0
+        remote_as: 65000
+        description: SPINE01
+
+      - ip: 10.0.0.4
+        remote_as: 65000
+        description: SPINE02
+
+
+  leaf02:
+    hostname: leaf02
+    asn: 65102
+    router_id: 10.255.1.2
+    loopback: 10.255.1.2/32
+    maximum_paths: 2
+
+    interfaces:
+      eth1: 10.0.0.3/31
+      eth2: 10.0.0.7/31
+
+    bgp_neighbors:
+      - ip: 10.0.0.2
+        remote_as: 65000
+        description: SPINE01
+
+      - ip: 10.0.0.6
+        remote_as: 65000
+        description: SPINE02

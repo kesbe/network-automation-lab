@@ -1,0 +1,110 @@
+---
+- name: Validate FRR configuration compliance
+  hosts: all
+  gather_facts: false
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+
+  tasks:
+
+    - name: Load intended configuration for device
+      ansible.builtin.set_fact:
+        intent: "{{ network_intent[inventory_hostname] }}"
+
+    - name: Collect running configuration
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: running_config
+      changed_when: false
+
+    - name: Collect BGP summary
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: bgp_summary
+      changed_when: false
+
+    - name: Normalize running configuration
+      ansible.builtin.set_fact:
+        current_config: >-
+          {{
+            running_config.stdout
+            | regex_replace('\r', '')
+          }}
+
+    - name: Validate hostname
+      ansible.builtin.assert:
+        that:
+          - "'hostname ' ~ intent.hostname in current_config"
+        fail_msg: "NON-COMPLIANT: hostname"
+        success_msg: "COMPLIANT: hostname"
+
+    - name: Validate BGP ASN
+      ansible.builtin.assert:
+        that:
+          - "'router bgp ' ~ (intent.asn | string) in current_config"
+        fail_msg: "NON-COMPLIANT: BGP ASN"
+        success_msg: "COMPLIANT: BGP ASN"
+
+    - name: Validate BGP router ID
+      ansible.builtin.assert:
+        that:
+          - "'bgp router-id ' ~ intent.router_id in current_config"
+        fail_msg: "NON-COMPLIANT: BGP router ID"
+        success_msg: "COMPLIANT: BGP router ID"
+
+    - name: Validate loopback address
+      ansible.builtin.assert:
+        that:
+          - "'ip address ' ~ intent.loopback in current_config"
+        fail_msg: "NON-COMPLIANT: loopback address"
+        success_msg: "COMPLIANT: loopback address"
+
+    - name: Validate physical interface addresses
+      ansible.builtin.assert:
+        that:
+          - "'interface ' ~ item.key in current_config"
+          - "'ip address ' ~ item.value in current_config"
+        fail_msg: "NON-COMPLIANT: {{ item.key }} {{ item.value }}"
+        success_msg: "COMPLIANT: {{ item.key }} {{ item.value }}"
+      loop: "{{ intent.interfaces | dict2items }}"
+
+    - name: Validate configured BGP neighbors
+      ansible.builtin.assert:
+        that:
+          - "'neighbor ' ~ item.ip ~ ' remote-as ' ~ (item.remote_as | string) in current_config"
+          - "'neighbor ' ~ item.ip ~ ' description ' ~ item.description in current_config"
+        fail_msg: "NON-COMPLIANT: BGP neighbor {{ item.ip }}"
+        success_msg: "COMPLIANT: BGP neighbor {{ item.ip }}"
+      loop: "{{ intent.bgp_neighbors }}"
+
+    - name: Validate BGP neighbors are operational
+      ansible.builtin.assert:
+        that:
+          - "item.ip in bgp_summary.stdout"
+          - "'Idle' not in bgp_summary.stdout"
+          - "'Active' not in bgp_summary.stdout"
+          - "'Connect' not in bgp_summary.stdout"
+        fail_msg: "NON-COMPLIANT: BGP operational state"
+        success_msg: "COMPLIANT: BGP neighbor operational"
+      loop: "{{ intent.bgp_neighbors }}"
+
+    - name: Validate ECMP setting where required
+      ansible.builtin.assert:
+        that:
+          - "'maximum-paths ' ~ (intent.maximum_paths | string) in current_config"
+        fail_msg: "NON-COMPLIANT: maximum-paths"
+        success_msg: "COMPLIANT: maximum-paths"
+      when: intent.maximum_paths is defined
+
+    - name: Publish compliance result
+      ansible.builtin.set_stats:
+        data:
+          "compliance_{{ inventory_hostname }}":
+            device: "{{ inventory_hostname }}"
+            status: COMPLIANT
+        per_host: false
+
+    - name: Display final device compliance result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} = COMPLIANT"
