@@ -20,6 +20,27 @@
           - target_device in network_intent
         fail_msg: "Invalid remediation request"
 
+    - name: Validate remediation launch scope
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              (ansible_limit | default('') | string | trim | length) == 0
+            ) or (
+              (ansible_limit | default('') | string | trim)
+              in ['all', target_device]
+            )
+        fail_msg: >-
+          Refusing remediation. Requested target is
+          {{ target_device }}
+          but execution limit is
+          {{ ansible_limit | default('NONE') }}.
+        success_msg: "Remediation launch scope validated"
+
+    - name: End remediation processing for non-target hosts
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != target_device
+
     - name: Load intended configuration
       ansible.builtin.set_fact:
         intent: "{{ network_intent[target_device] }}"
