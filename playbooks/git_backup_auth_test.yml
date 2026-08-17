@@ -19,6 +19,79 @@
         success_msg: "PASS - AWX Git credential environment variables are present"
         fail_msg: "FAIL - AWX Git credential environment variables are missing"
 
+    - name: Test GitHub PAT validity
+      ansible.builtin.uri:
+        url: https://api.github.com/user
+        method: GET
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
+        status_code:
+          - 200
+          - 401
+          - 403
+        return_content: true
+      register: github_user_test
+      changed_when: false
+      no_log: true
+
+    - name: Report GitHub PAT validity
+      ansible.builtin.debug:
+        msg: "GitHub PAT /user HTTP status={{ github_user_test.status }}"
+
+    - name: Test GitHub repository visibility
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/kesbe/network-config-backups
+        method: GET
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
+        status_code:
+          - 200
+          - 401
+          - 403
+          - 404
+        return_content: true
+      register: github_repo_test
+      changed_when: false
+      no_log: true
+
+    - name: Report GitHub repository visibility
+      ansible.builtin.debug:
+        msg: "GitHub repository HTTP status={{ github_repo_test.status }}"
+
+    - name: Test GitHub repository contents permission
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/kesbe/network-config-backups/contents/README.md
+        method: GET
+        headers:
+          Accept: application/vnd.github+json
+          Authorization: "Bearer {{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
+        status_code:
+          - 200
+          - 401
+          - 403
+          - 404
+        return_content: false
+      register: github_contents_test
+      changed_when: false
+      no_log: true
+
+    - name: Report GitHub contents permission
+      ansible.builtin.debug:
+        msg: "GitHub Contents API HTTP status={{ github_contents_test.status }}"
+
+    - name: Validate GitHub PAT access
+      ansible.builtin.assert:
+        that:
+          - github_user_test.status | int == 200
+          - github_repo_test.status | int == 200
+          - github_contents_test.status | int == 200
+        success_msg: "PASS - PAT is valid and can read network-config-backups"
+        fail_msg: >-
+          FAIL - PAT validity or repository permissions are incorrect.
+          Check the three HTTP status codes above.
+
     - name: Verify generic GitHub connectivity
       ansible.builtin.command:
         argv:
