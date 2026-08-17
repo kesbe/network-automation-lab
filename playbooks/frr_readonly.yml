@@ -1,0 +1,42 @@
+---
+- name: FRR read-only validation
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Get FRR version
+      ansible.builtin.raw: >
+        vtysh -c 'show version'
+      register: frr_version
+      changed_when: false
+
+    - name: Get BGP IPv4 summary
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: bgp_summary
+      changed_when: false
+
+    - name: Get running configuration
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: running_config
+      changed_when: false
+
+    - name: Display FRR version
+      ansible.builtin.debug:
+        msg: |
+          ===== {{ inventory_hostname }} FRR VERSION =====
+          {{ frr_version.stdout }}
+
+    - name: Display BGP summary
+      ansible.builtin.debug:
+        msg: |
+          ===== {{ inventory_hostname }} BGP SUMMARY =====
+          {{ bgp_summary.stdout }}
+
+    - name: Display running configuration
+      ansible.builtin.debug:
+        msg: |
+          ===== {{ inventory_hostname }} RUNNING CONFIG =====
+          {{ running_config.stdout }}
