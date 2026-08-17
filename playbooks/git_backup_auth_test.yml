@@ -5,61 +5,122 @@
 
   vars:
     backup_repo_url: "https://github.com/kesbe/network-config-backups.git"
+    public_test_repo: "https://github.com/ansible/ansible-tower-samples.git"
     test_dir: "/tmp/network-config-backups-auth-test"
+    askpass_file: "/tmp/git-backup-askpass.sh"
 
   tasks:
+
+    - name: Verify AWX custom credential environment injection
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'GIT_BACKUP_USERNAME') | length > 0
+          - lookup('env', 'GIT_BACKUP_TOKEN') | length > 0
+        success_msg: "PASS - AWX Git credential environment variables are present"
+        fail_msg: "FAIL - AWX Git credential environment variables are missing"
+
+    - name: Verify generic GitHub connectivity
+      ansible.builtin.command:
+        argv:
+          - git
+          - ls-remote
+          - "{{ public_test_repo }}"
+          - HEAD
+      register: github_connectivity
+      changed_when: false
+
+    - name: Display GitHub connectivity result
+      ansible.builtin.debug:
+        msg: "PASS - GitHub connectivity works"
 
     - name: Remove previous test directory
       ansible.builtin.file:
         path: "{{ test_dir }}"
         state: absent
 
-    - name: Create temporary Git askpass helper
-      ansible.builtin.copy:
-        dest: /tmp/git-backup-askpass.sh
-        mode: "0700"
-        content: |
-          #!/bin/sh
-          case "$1" in
-            *Username*) printf '%s\n' "$GIT_BACKUP_USERNAME" ;;
-            *Password*) printf '%s\n' "$GIT_BACKUP_TOKEN" ;;
-          esac
-      no_log: true
+    - name: Test authenticated Git access
+      block:
 
-    - name: Clone backup repository using AWX credential
-      ansible.builtin.command:
-        argv:
-          - git
-          - clone
-          - --depth
-          - "1"
-          - "{{ backup_repo_url }}"
-          - "{{ test_dir }}"
-      environment:
-        GIT_ASKPASS: /tmp/git-backup-askpass.sh
-        GIT_TERMINAL_PROMPT: "0"
-        GIT_BACKUP_USERNAME: "{{ lookup('env', 'GIT_BACKUP_USERNAME') }}"
-        GIT_BACKUP_TOKEN: "{{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
-      register: clone_result
-      changed_when: false
-      no_log: true
+        - name: Create temporary Git askpass helper
+          ansible.builtin.copy:
+            dest: "{{ askpass_file }}"
+            mode: "0700"
+            content: |
+              #!/bin/sh
+              case "$1" in
+                *Username*)
+                  printf '%s\n' "$GIT_BACKUP_USERNAME"
+                  ;;
+                *Password*)
+                  printf '%s\n' "$GIT_BACKUP_TOKEN"
+                  ;;
+              esac
+          no_log: true
 
-    - name: Verify repository clone
-      ansible.builtin.command:
-        argv:
-          - git
-          - -C
-          - "{{ test_dir }}"
-          - rev-parse
-          - --is-inside-work-tree
-      register: repo_check
-      changed_when: false
+        - name: Test access to private backup repository
+          ansible.builtin.command:
+            argv:
+              - git
+              - ls-remote
+              - "{{ backup_repo_url }}"
+              - HEAD
+          environment:
+            GIT_ASKPASS: "{{ askpass_file }}"
+            GIT_TERMINAL_PROMPT: "0"
+          register: private_repo_test
+          changed_when: false
+          failed_when: false
+          no_log: true
 
-    - name: Display authentication result
-      ansible.builtin.debug:
-        msg: "GitHub backup repository authentication successful: {{ repo_check.stdout }}"
+        - name: Report authenticated Git return code
+          ansible.builtin.debug:
+            msg: "Authenticated Git test rc={{ private_repo_test.rc | default(-1) }}"
 
-    - name: Remove temporary credentials helper
-      ansible.builtin.file:
-        path: /tmp/git-backup-askpass.sh
-        state: absent
+        - name: Verify authenticated repository access
+          ansible.builtin.assert:
+            that:
+              - private_repo_test.rc | int == 0
+            success_msg: "PASS - AWX credential can authenticate to network-config-backups"
+            fail_msg: >-
+              FAIL - credential injection and GitHub connectivity work,
+              but authenticated access to network-config-backups failed.
+
+        - name: Clone backup repository
+          ansible.builtin.command:
+            argv:
+              - git
+              - clone
+              - --depth
+              - "1"
+              - "{{ backup_repo_url }}"
+              - "{{ test_dir }}"
+          environment:
+            GIT_ASKPASS: "{{ askpass_file }}"
+            GIT_TERMINAL_PROMPT: "0"
+          register: clone_result
+          changed_when: false
+          no_log: true
+
+        - name: Verify cloned repository
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ test_dir }}"
+              - rev-parse
+              - --is-inside-work-tree
+          register: repo_check
+          changed_when: false
+
+        - name: Display final authentication result
+          ansible.builtin.debug:
+            msg: >-
+              GitHub backup repository authentication successful:
+              {{ repo_check.stdout }}
+
+      always:
+
+        - name: Remove temporary credentials helper
+          ansible.builtin.file:
+            path: "{{ askpass_file }}"
+            state: absent
