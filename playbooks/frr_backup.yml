@@ -1,0 +1,44 @@
+---
+- name: FRR configuration backup
+  hosts: all
+  gather_facts: false
+
+  tasks:
+
+    - name: Collect FRR running configuration
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: running_config
+      changed_when: false
+
+    - name: Normalize running configuration
+      ansible.builtin.set_fact:
+        normalized_config: >-
+          {{
+            running_config.stdout
+            | regex_replace('\r', '')
+            | regex_replace('^Building configuration\.\.\.\n+', '')
+            | regex_replace('^Current configuration:\n+', '')
+          }}
+
+    - name: Calculate configuration SHA256
+      ansible.builtin.set_fact:
+        config_sha256: "{{ normalized_config | hash('sha256') }}"
+
+    - name: Display backup metadata
+      ansible.builtin.debug:
+        msg:
+          device: "{{ inventory_hostname }}"
+          management_ip: "{{ ansible_host }}"
+          sha256: "{{ config_sha256 }}"
+          bytes: "{{ normalized_config | length }}"
+
+    - name: Publish configuration backup as AWX artifact
+      ansible.builtin.set_stats:
+        data:
+          "backup_{{ inventory_hostname }}":
+            hostname: "{{ inventory_hostname }}"
+            management_ip: "{{ ansible_host }}"
+            sha256: "{{ config_sha256 }}"
+            configuration: "{{ normalized_config }}"
+        per_host: false
