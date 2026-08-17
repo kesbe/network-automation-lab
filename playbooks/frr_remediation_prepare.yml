@@ -1,0 +1,122 @@
+---
+- name: Prepare FRR closed-loop remediation request
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+
+  tasks:
+
+    - name: Initialize non-compliant device list
+      ansible.builtin.set_fact:
+        non_compliant_devices: []
+
+    - name: Find non-compliant devices from NW02 artifacts
+      ansible.builtin.set_fact:
+        non_compliant_devices: >-
+          {{
+            non_compliant_devices + [item]
+          }}
+      loop: "{{ network_intent.keys() | list }}"
+      when:
+        - vars['compliance_' ~ item] is defined
+        - vars['compliance_' ~ item].status | default('') == 'NON-COMPLIANT'
+
+    - name: Display detected non-compliant devices
+      ansible.builtin.debug:
+        msg: >-
+          Non-compliant devices detected:
+          {{ non_compliant_devices }}
+
+    - name: Require exactly one device for automatic remediation
+      ansible.builtin.assert:
+        that:
+          - non_compliant_devices | length == 1
+        fail_msg: >-
+          Automatic remediation refused.
+          Expected exactly one non-compliant device but found
+          {{ non_compliant_devices | length }}:
+          {{ non_compliant_devices }}.
+        success_msg: >-
+          Exactly one non-compliant device detected;
+          automatic remediation may continue.
+
+    - name: Select remediation target
+      ansible.builtin.set_fact:
+        remediation_target: "{{ non_compliant_devices[0] }}"
+
+    - name: Extract remediation violations
+      ansible.builtin.set_fact:
+        remediation_violations: >-
+          {{
+            vars['compliance_' ~ remediation_target].violations
+            | default([])
+          }}
+
+    - name: Require actionable violations
+      ansible.builtin.assert:
+        that:
+          - remediation_violations | length > 0
+        fail_msg: >-
+          Automatic remediation refused because
+          {{ remediation_target }} has no actionable violations.
+        success_msg: >-
+          Actionable compliance violations are available.
+
+    - name: Validate supported automatic remediation controls
+      ansible.builtin.set_fact:
+        unsupported_controls: >-
+          {{
+            remediation_violations
+            | map(attribute='control')
+            | list
+            | unique
+            | difference([
+                'bgp_neighbor_configuration',
+                'maximum_paths'
+              ])
+          }}
+
+    - name: Refuse unsupported automatic remediation
+      ansible.builtin.assert:
+        that:
+          - unsupported_controls | length == 0
+        fail_msg: >-
+          Automatic remediation refused.
+          Unsupported controls:
+          {{ unsupported_controls }}
+        success_msg: >-
+          All detected violations are approved for automatic remediation.
+
+    - name: Display closed-loop remediation request
+      ansible.builtin.debug:
+        msg:
+          target_device: "{{ remediation_target }}"
+          violation_count: "{{ remediation_violations | length }}"
+          controls: >-
+            {{
+              remediation_violations
+              | map(attribute='control')
+              | list
+              | unique
+            }}
+
+    - name: Publish NW03 remediation request
+      ansible.builtin.set_stats:
+        data:
+          target_device: "{{ remediation_target }}"
+          violations: "{{ remediation_violations }}"
+          remediation_request:
+            target_device: "{{ remediation_target }}"
+            violation_count: "{{ remediation_violations | length }}"
+            controls: >-
+              {{
+                remediation_violations
+                | map(attribute='control')
+                | list
+                | unique
+              }}
+            status: APPROVED
+        per_host: false
