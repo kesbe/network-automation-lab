@@ -1,0 +1,65 @@
+---
+- name: Test GitHub backup repository authentication
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    backup_repo_url: "https://github.com/kesbe/network-config-backups.git"
+    test_dir: "/tmp/network-config-backups-auth-test"
+
+  tasks:
+
+    - name: Remove previous test directory
+      ansible.builtin.file:
+        path: "{{ test_dir }}"
+        state: absent
+
+    - name: Create temporary Git askpass helper
+      ansible.builtin.copy:
+        dest: /tmp/git-backup-askpass.sh
+        mode: "0700"
+        content: |
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' "$GIT_BACKUP_USERNAME" ;;
+            *Password*) printf '%s\n' "$GIT_BACKUP_TOKEN" ;;
+          esac
+      no_log: true
+
+    - name: Clone backup repository using AWX credential
+      ansible.builtin.command:
+        argv:
+          - git
+          - clone
+          - --depth
+          - "1"
+          - "{{ backup_repo_url }}"
+          - "{{ test_dir }}"
+      environment:
+        GIT_ASKPASS: /tmp/git-backup-askpass.sh
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_BACKUP_USERNAME: "{{ lookup('env', 'GIT_BACKUP_USERNAME') }}"
+        GIT_BACKUP_TOKEN: "{{ lookup('env', 'GIT_BACKUP_TOKEN') }}"
+      register: clone_result
+      changed_when: false
+      no_log: true
+
+    - name: Verify repository clone
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ test_dir }}"
+          - rev-parse
+          - --is-inside-work-tree
+      register: repo_check
+      changed_when: false
+
+    - name: Display authentication result
+      ansible.builtin.debug:
+        msg: "GitHub backup repository authentication successful: {{ repo_check.stdout }}"
+
+    - name: Remove temporary credentials helper
+      ansible.builtin.file:
+        path: /tmp/git-backup-askpass.sh
+        state: absent
