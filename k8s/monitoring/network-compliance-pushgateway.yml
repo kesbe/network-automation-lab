@@ -1,0 +1,139 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: network-compliance-pushgateway-data
+  namespace: monitoring
+  labels:
+    app: network-compliance-pushgateway
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network-compliance-pushgateway
+  namespace: monitoring
+  labels:
+    app: network-compliance-pushgateway
+spec:
+  replicas: 1
+
+  # RWO persistence should not be mounted concurrently
+  # by old/new replicas during an update.
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: network-compliance-pushgateway
+
+  template:
+    metadata:
+      labels:
+        app: network-compliance-pushgateway
+
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+
+      containers:
+        - name: pushgateway
+          image: prom/pushgateway:v1.11.3
+          imagePullPolicy: IfNotPresent
+
+          args:
+            - --web.listen-address=:9091
+            - --persistence.file=/data/metrics.db
+
+          ports:
+            - name: http
+              containerPort: 9091
+              protocol: TCP
+
+          securityContext:
+            allowPrivilegeEscalation: false
+
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: network-compliance-pushgateway-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: network-compliance-pushgateway
+  namespace: monitoring
+  labels:
+    app: network-compliance-pushgateway
+spec:
+  type: ClusterIP
+
+  selector:
+    app: network-compliance-pushgateway
+
+  ports:
+    - name: http
+      port: 9091
+      targetPort: http
+      protocol: TCP
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: network-compliance-pushgateway
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: network-compliance-pushgateway
+
+  namespaceSelector:
+    matchNames:
+      - monitoring
+
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+      # Preserve job/device labels pushed by the detector.
+      honorLabels: true

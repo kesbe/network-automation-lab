@@ -3,6 +3,15 @@
   hosts: all
   gather_facts: false
 
+  vars:
+    # Default behaviour is intentionally compatible with WF02.
+    # The scheduled detector job template overrides these values.
+    publish_compliance_metrics: false
+    fail_on_noncompliance: true
+
+    pushgateway_url: >-
+      http://network-compliance-pushgateway.monitoring.svc.cluster.local:9091
+
   vars_files:
     - ../vars/compliance_intent.yml
 
@@ -209,6 +218,38 @@
             violations: "{{ compliance_violations }}"
         per_host: false
 
+    - name: Build Prometheus compliance metrics
+      ansible.builtin.set_fact:
+        compliance_metrics_payload: |
+          # HELP network_compliance_status Network compliance state: 1 compliant, 0 non-compliant
+          # TYPE network_compliance_status gauge
+          network_compliance_status {{ 1 if compliance_status == 'COMPLIANT' else 0 }}
+          # HELP network_compliance_violations Number of failed compliance controls
+          # TYPE network_compliance_violations gauge
+          network_compliance_violations {{ compliance_failed_checks | int }}
+          # HELP network_compliance_total_checks Number of compliance controls evaluated
+          # TYPE network_compliance_total_checks gauge
+          network_compliance_total_checks {{ compliance_total_checks | int }}
+          # HELP network_compliance_passed_checks Number of compliance controls that passed
+          # TYPE network_compliance_passed_checks gauge
+          network_compliance_passed_checks {{ compliance_passed_checks | int }}
+      when: publish_compliance_metrics | bool
+
+    - name: Publish compliance metrics to Prometheus Pushgateway
+      ansible.builtin.uri:
+        url: >-
+          {{ pushgateway_url }}/metrics/job/network_compliance/device/{{ inventory_hostname }}
+        method: PUT
+        body: "{{ compliance_metrics_payload }}"
+        headers:
+          Content-Type: "text/plain; version=0.0.4; charset=utf-8"
+        status_code:
+          - 200
+          - 202
+        return_content: false
+      delegate_to: localhost
+      when: publish_compliance_metrics | bool
+
     - name: Display final device status
       ansible.builtin.debug:
         msg: >-
@@ -222,4 +263,6 @@
           {{ inventory_hostname }} is NON-COMPLIANT.
           {{ compliance_failed_checks }} compliance control(s) failed.
           Violations: {{ compliance_violations }}
-      when: compliance_failed_checks | int > 0
+      when:
+        - fail_on_noncompliance | bool
+        - compliance_failed_checks | int > 0
