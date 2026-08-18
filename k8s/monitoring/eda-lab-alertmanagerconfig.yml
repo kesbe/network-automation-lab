@@ -1,0 +1,32 @@
+---
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+
+metadata:
+  name: eda-lab
+  namespace: monitoring
+
+spec:
+  route:
+    receiver: eda-webhook
+
+    groupBy:
+      - alertname
+
+    matchers:
+      - name: alertname
+        matchType: =~
+        value: 'EDALabHighCPU|EDANetworkComplianceDrift'
+
+    groupWait: 1s
+    groupInterval: 10s
+    repeatInterval: 1h
+
+  receivers:
+    - name: eda-webhook
+
+      webhookConfigs:
+        - url: >-
+            http://eda-alertmanager-awx-activation.eda.svc.cluster.local:5001/endpoint
+
+          sendResolved: true

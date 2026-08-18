@@ -1,0 +1,51 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+
+metadata:
+  name: network-compliance-alerts
+  namespace: monitoring
+
+  labels:
+    release: monitoring
+
+spec:
+  groups:
+
+    - name: network-compliance.rules
+
+      rules:
+
+        - alert: EDANetworkComplianceDrift
+
+          expr: |
+            (
+              network_compliance_status{
+                job="network_compliance"
+              } == 0
+            )
+            and on (job, device)
+            (
+              (
+                time()
+                -
+                push_time_seconds{
+                  job="network_compliance"
+                }
+              ) < 93600
+            )
+
+          for: 1m
+
+          labels:
+            severity: warning
+            category: network_compliance
+            automation: eda
+
+          annotations:
+            summary: >-
+              Network compliance drift detected on {{ $labels.device }}
+
+            description: >-
+              Device {{ $labels.device }} failed the scheduled
+              network configuration compliance audit.
