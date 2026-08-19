@@ -1,0 +1,146 @@
+---
+# NetBox network Source-of-Truth lab
+# Chart: netbox-community/netbox-chart 8.3.48
+# NetBox: 4.6.7
+
+global:
+  storageClass: gp3
+
+replicaCount: 1
+
+# gp3/EBS is ReadWriteOnce. Keep all consumers of netbox-media
+# on the designated media node.
+updateStrategy:
+  type: Recreate
+
+nodeSelector:
+  netbox-media-node: "true"
+
+superuser:
+  name: admin
+  email: admin@network-lab.local
+  existingSecret: netbox-superuser
+
+existingSecret: netbox-config
+
+allowedHosts:
+  - "*"
+
+timeZone: Australia/Sydney
+
+service:
+  type: ClusterIP
+  port: 80
+
+# NetBox uploaded media.
+persistence:
+  enabled: true
+  storageClass: gp3
+  accessMode: ReadWriteOnce
+  size: 2Gi
+
+# Do not use the chart's "medium" resource preset.
+resourcesPreset: none
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 768Mi
+  limits:
+    cpu: 500m
+    memory: 1536Mi
+
+extraEnvs:
+  - name: GRANIAN_WORKERS
+    value: "2"
+
+worker:
+  enabled: true
+  replicaCount: 1
+
+  updateStrategy:
+    type: Recreate
+
+  nodeSelector:
+    netbox-media-node: "true"
+
+  resourcesPreset: none
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+
+housekeeping:
+  enabled: true
+  timezone: Australia/Sydney
+
+  nodeSelector:
+    netbox-media-node: "true"
+
+  resourcesPreset: none
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# -------------------------------------------------------------------
+# PostgreSQL
+# -------------------------------------------------------------------
+
+postgresql:
+  enabled: true
+
+  auth:
+    username: netbox
+    database: netbox
+
+  primary:
+    persistence:
+      enabled: true
+      storageClass: gp3
+      size: 5Gi
+
+    resourcesPreset: none
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+
+# -------------------------------------------------------------------
+# Valkey
+# -------------------------------------------------------------------
+
+valkey:
+  enabled: true
+  architecture: standalone
+
+  sentinel:
+    enabled: false
+
+  primary:
+    persistence:
+      enabled: true
+      storageClass: gp3
+      size: 2Gi
+
+    resourcesPreset: none
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 512Mi
