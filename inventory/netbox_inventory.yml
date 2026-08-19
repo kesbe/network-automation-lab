@@ -1,0 +1,26 @@
+---
+plugin: netbox.netbox.nb_inventory
+
+token:
+  type: Bearer
+  value: "{{ lookup('ansible.builtin.env', 'NETBOX_TOKEN') }}"
+
+validate_certs: false
+
+config_context: false
+interfaces: false
+services: false
+racks: false
+
+plurals: false
+
+device_query_filters:
+  - has_primary_ip: "true"
+
+group_by:
+  - site
+  - role
+  - platform
+
+compose:
+  bgp_asn: custom_fields.bgp_asn.asn
