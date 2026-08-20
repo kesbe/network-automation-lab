@@ -1,0 +1,44 @@
+---
+compliance_policies:
+
+  NET-BGP-001:
+    name: BGP neighbor configuration
+    description: >
+      Validate BGP neighbor remote-AS and description against
+      the approved network intent.
+    control: bgp_neighbor_configuration
+
+    category: routing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: true
+      mode: approval_required
+      risk: high
+
+    owner: network_operations
+
+    enabled: true
+
+  NET-BGP-002:
+    name: BGP ECMP maximum paths
+    description: >
+      Validate configured BGP ECMP maximum-paths against
+      the approved network intent.
+    control: maximum_paths
+
+    category: routing
+    severity: high
+
+    ticket_required: false
+
+    remediation:
+      supported: true
+      mode: auto
+      risk: low
+
+    owner: network_operations
+
+    enabled: true
