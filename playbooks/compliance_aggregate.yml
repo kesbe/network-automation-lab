@@ -460,3 +460,11 @@
               compliance_run
             }}
         per_host: false
+
+    - name: Publish compliance aggregation correlation metadata
+      ansible.builtin.set_stats:
+        data:
+          compliance_job_id: "{{ compliance_job_id | default('') }}"
+          aggregator_job_id: "{{ awx_job_id | int }}"
+          workflow_job_id: "{{ awx_workflow_job_id | default('') }}"
+        per_host: false

@@ -286,6 +286,13 @@
             violations: "{{ compliance_violations }}"
         per_host: false
 
+    - name: Publish compliance job correlation metadata
+      ansible.builtin.set_stats:
+        data:
+          compliance_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+      run_once: true
+
     - name: Build Prometheus compliance metrics
       ansible.builtin.set_fact:
         compliance_metrics_payload: |
