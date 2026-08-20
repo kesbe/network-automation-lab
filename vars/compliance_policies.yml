@@ -1,6 +1,28 @@
 ---
 compliance_policies:
 
+  NET-SYS-001:
+    name: Network device hostname
+    description: >
+      Validate the configured device hostname against the
+      approved network intent.
+    control: hostname
+
+    category: system
+    severity: medium
+
+    ticket_required: false
+
+    remediation:
+      supported: false
+      mode: report_only
+      risk: low
+
+    owner: network_operations
+
+    enabled: true
+
+
   NET-BGP-001:
     name: BGP neighbor configuration
     description: >
@@ -22,6 +44,7 @@ compliance_policies:
 
     enabled: true
 
+
   NET-BGP-002:
     name: BGP ECMP maximum paths
     description: >
@@ -38,6 +61,116 @@ compliance_policies:
       supported: true
       mode: auto
       risk: low
+
+    owner: network_operations
+
+    enabled: true
+
+
+  NET-BGP-003:
+    name: BGP local autonomous system number
+    description: >
+      Validate the configured local BGP autonomous system
+      number against the approved network intent.
+    control: bgp_asn
+
+    category: routing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: false
+      mode: manual
+      risk: high
+
+    owner: network_operations
+
+    enabled: true
+
+
+  NET-BGP-004:
+    name: BGP router ID
+    description: >
+      Validate the configured BGP router ID against the
+      approved network intent.
+    control: bgp_router_id
+
+    category: routing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: false
+      mode: manual
+      risk: high
+
+    owner: network_operations
+
+    enabled: true
+
+
+  NET-BGP-005:
+    name: BGP neighbor operational state
+    description: >
+      Validate that expected BGP neighbors remain operational
+      after configuration and compliance checks.
+    control: bgp_neighbor_operational
+
+    category: routing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: false
+      mode: manual
+      risk: high
+
+    owner: network_operations
+
+    enabled: true
+
+
+  NET-IP-001:
+    name: Loopback IP address
+    description: >
+      Validate the configured loopback address against the
+      approved network intent.
+    control: loopback_address
+
+    category: addressing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: false
+      mode: manual
+      risk: high
+
+    owner: network_operations
+
+    enabled: true
+
+
+  NET-IP-002:
+    name: Physical interface IP address
+    description: >
+      Validate physical interface addressing against the
+      approved network intent.
+    control: interface_address
+
+    category: addressing
+    severity: critical
+
+    ticket_required: true
+
+    remediation:
+      supported: false
+      mode: manual
+      risk: high
 
     owner: network_operations
 
