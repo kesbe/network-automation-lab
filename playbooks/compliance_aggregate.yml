@@ -381,13 +381,24 @@
         generated_compliance_run_id: >-
           {{
             compliance_run_id
-            | default(
-                'compliance-'
-                ~ lookup(
-                    'ansible.builtin.pipe',
-                    'date -u +%Y%m%dT%H%M%SZ'
-                  )
-              )
+            if (
+              compliance_run_id is defined
+              and
+              (
+                compliance_run_id
+                | string
+                | trim
+                | length
+              ) > 0
+            )
+            else
+            (
+              'compliance-'
+              ~ lookup(
+                  'ansible.builtin.pipe',
+                  "python3 -c 'import uuid; print(uuid.uuid4())'"
+                )
+            )
           }}
 
         generated_compliance_timestamp: >-
