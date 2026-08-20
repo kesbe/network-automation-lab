@@ -1,0 +1,451 @@
+---
+- name: Aggregate network compliance findings
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+
+  tasks:
+
+    - name: Initialize compliance aggregation
+      ansible.builtin.set_fact:
+        compliance_device_results: []
+        compliance_findings: []
+
+    - name: Validate per-device compliance artifacts
+      ansible.builtin.assert:
+        that:
+          - vars['compliance_' ~ item] is defined
+          - vars['compliance_' ~ item] is mapping
+          - vars['compliance_' ~ item].device is defined
+          - vars['compliance_' ~ item].status is defined
+          - vars['compliance_' ~ item].violations is defined
+        fail_msg: >-
+          Missing or invalid compliance artifact for device {{ item }}.
+        success_msg: >-
+          Compliance artifact validated for {{ item }}.
+      loop: "{{ network_intent.keys() | list | sort }}"
+
+    - name: Collect per-device compliance results
+      ansible.builtin.set_fact:
+        compliance_device_results: >-
+          {{
+            compliance_device_results
+            +
+            [
+              vars['compliance_' ~ item]
+            ]
+          }}
+      loop: "{{ network_intent.keys() | list | sort }}"
+
+    - name: Validate enriched compliance finding contract
+      ansible.builtin.assert:
+        that:
+          - item.1.control is defined
+          - item.1.policy_id is defined
+          - item.1.policy_name is defined
+          - item.1.category is defined
+          - item.1.severity is defined
+          - item.1.ticket_required is defined
+          - item.1.ticket_required is boolean
+          - item.1.owner is defined
+          - item.1.remediation is defined
+          - item.1.remediation is mapping
+          - item.1.remediation.mode is defined
+          - item.1.remediation.risk is defined
+          - item.1.remediation.supported is defined
+        fail_msg: >-
+          Invalid enriched compliance finding for
+          {{ item.0.device }} /
+          {{ item.1.control | default('UNKNOWN') }}.
+        success_msg: >-
+          Enriched finding contract validated for
+          {{ item.0.device }} /
+          {{ item.1.policy_id }}.
+      loop: >-
+        {{
+          query(
+            'ansible.builtin.subelements',
+            compliance_device_results,
+            'violations',
+            {
+              'skip_missing': true
+            }
+          )
+        }}
+      loop_control:
+        label: >-
+          {{
+            item.0.device
+          }}
+          /
+          {{
+            item.1.policy_id
+            | default(item.1.control | default('UNKNOWN'))
+          }}
+
+    - name: Flatten compliance violations into findings
+      ansible.builtin.set_fact:
+        compliance_findings: >-
+          {{
+            compliance_findings
+            +
+            [
+              item.1
+              | combine(
+                  {
+                    'device': item.0.device,
+                    'device_status': item.0.status,
+                    'finding_scope': finding_scope,
+                    'finding_fingerprint': finding_fingerprint,
+                    'finding_id': finding_id
+                  },
+                  recursive=True
+                )
+            ]
+          }}
+      vars:
+        finding_interface: >-
+          {{
+            (
+              item.1.interface
+              | default('', true)
+            )
+            if item.1.interface is defined
+            else
+            (
+              (
+                item.1.expected.get(
+                  'interface',
+                  ''
+                )
+                | default('', true)
+              )
+              if item.1.expected is mapping
+              else
+              (
+                (
+                  item.1.actual.get(
+                    'interface',
+                    ''
+                  )
+                  | default('', true)
+                )
+                if item.1.actual is mapping
+                else
+                ''
+              )
+            )
+          }}
+
+        finding_neighbor: >-
+          {{
+            (
+              item.1.neighbor
+              | default('', true)
+            )
+            if item.1.neighbor is defined
+            else
+            (
+              (
+                item.1.expected.get(
+                  'neighbor',
+                  ''
+                )
+                | default('', true)
+              )
+              if item.1.expected is mapping
+              else
+              (
+                (
+                  item.1.actual.get(
+                    'neighbor',
+                    ''
+                  )
+                  | default('', true)
+                )
+                if item.1.actual is mapping
+                else
+                ''
+              )
+            )
+          }}
+
+        finding_scope: >-
+          {{
+            (
+              'interface:' ~ finding_interface
+            )
+            if (
+              finding_interface
+              | string
+              | length
+            ) > 0
+            else
+            (
+              (
+                'neighbor:' ~ finding_neighbor
+              )
+              if (
+                finding_neighbor
+                | string
+                | length
+              ) > 0
+              else
+              'device'
+            )
+          }}
+
+        finding_fingerprint: >-
+          {{
+            item.0.device
+            ~ '|'
+            ~ item.1.policy_id
+            ~ '|'
+            ~ finding_scope
+          }}
+
+        finding_id: >-
+          {{
+            'finding-'
+            ~
+            (
+              finding_fingerprint
+              | hash('sha256')
+            )[:20]
+          }}
+
+      loop: >-
+        {{
+          query(
+            'ansible.builtin.subelements',
+            compliance_device_results,
+            'violations',
+            {
+              'skip_missing': true
+            }
+          )
+        }}
+      loop_control:
+        label: >-
+          {{
+            item.0.device
+          }}
+          /
+          {{
+            item.1.policy_id
+          }}
+          /
+          {{
+            finding_scope
+          }}
+
+    - name: Build severity routed finding collections
+      ansible.builtin.set_fact:
+        compliance_critical_findings: >-
+          {{
+            compliance_findings
+            | selectattr(
+                'severity',
+                'equalto',
+                'critical'
+              )
+            | selectattr(
+                'ticket_required',
+                'equalto',
+                true
+              )
+            | list
+          }}
+
+        compliance_high_findings: >-
+          {{
+            compliance_findings
+            | selectattr(
+                'severity',
+                'equalto',
+                'high'
+              )
+            | list
+          }}
+
+        compliance_medium_findings: >-
+          {{
+            compliance_findings
+            | selectattr(
+                'severity',
+                'equalto',
+                'medium'
+              )
+            | list
+          }}
+
+        compliance_low_findings: >-
+          {{
+            compliance_findings
+            | selectattr(
+                'severity',
+                'equalto',
+                'low'
+              )
+            | list
+          }}
+
+        compliance_info_findings: >-
+          {{
+            compliance_findings
+            | selectattr(
+                'severity',
+                'equalto',
+                'info'
+              )
+            | list
+          }}
+
+    - name: Build compliance run summary
+      ansible.builtin.set_fact:
+        compliance_summary: >-
+          {{
+            {
+              'devices_checked':
+                (
+                  compliance_device_results
+                  | length
+                ),
+
+              'devices_compliant':
+                (
+                  compliance_device_results
+                  | selectattr(
+                      'status',
+                      'equalto',
+                      'COMPLIANT'
+                    )
+                  | list
+                  | length
+                ),
+
+              'devices_noncompliant':
+                (
+                  compliance_device_results
+                  | selectattr(
+                      'status',
+                      'equalto',
+                      'NON-COMPLIANT'
+                    )
+                  | list
+                  | length
+                ),
+
+              'total_findings':
+                (
+                  compliance_findings
+                  | length
+                ),
+
+              'critical_findings':
+                (
+                  compliance_critical_findings
+                  | length
+                ),
+
+              'high_findings':
+                (
+                  compliance_high_findings
+                  | length
+                ),
+
+              'medium_findings':
+                (
+                  compliance_medium_findings
+                  | length
+                ),
+
+              'low_findings':
+                (
+                  compliance_low_findings
+                  | length
+                ),
+
+              'info_findings':
+                (
+                  compliance_info_findings
+                  | length
+                )
+            }
+          }}
+
+    - name: Generate compliance run identity
+      ansible.builtin.set_fact:
+        generated_compliance_run_id: >-
+          {{
+            compliance_run_id
+            | default(
+                'compliance-'
+                ~ lookup(
+                    'ansible.builtin.pipe',
+                    'date -u +%Y%m%dT%H%M%SZ'
+                  )
+              )
+          }}
+
+        generated_compliance_timestamp: >-
+          {{
+            lookup(
+              'ansible.builtin.pipe',
+              'date -u +%Y-%m-%dT%H:%M:%SZ'
+            )
+          }}
+
+    - name: Build structured compliance run
+      ansible.builtin.set_fact:
+        compliance_run:
+          schema_version: "1.0"
+
+          run_id: >-
+            {{
+              generated_compliance_run_id
+            }}
+
+          generated_at: >-
+            {{
+              generated_compliance_timestamp
+            }}
+
+          summary: >-
+            {{
+              compliance_summary
+            }}
+
+          device_results: >-
+            {{
+              compliance_device_results
+            }}
+
+          findings: >-
+            {{
+              compliance_findings
+            }}
+
+          critical_findings: >-
+            {{
+              compliance_critical_findings
+            }}
+
+    - name: Display compliance run summary
+      ansible.builtin.debug:
+        var: compliance_summary
+
+    - name: Display critical ticket findings
+      ansible.builtin.debug:
+        var: compliance_critical_findings
+
+    - name: Publish structured compliance run artifact
+      ansible.builtin.set_stats:
+        data:
+          compliance_run: >-
+            {{
+              compliance_run
+            }}
+        per_host: false
