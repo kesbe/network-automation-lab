@@ -14,6 +14,7 @@
 
   vars_files:
     - ../vars/compliance_intent.yml
+    - ../vars/compliance_policies.yml
 
   tasks:
 
@@ -169,6 +170,73 @@
       when:
         - intent.maximum_paths is defined
         - "'maximum-paths ' ~ (intent.maximum_paths | string) not in current_config"
+
+    - name: Validate policy metadata for detected violations
+      ansible.builtin.assert:
+        that:
+          - policy_matches | length == 1
+        fail_msg: >-
+          Policy metadata lookup failed for compliance control
+          {{ item.control }}. Expected exactly one enabled policy,
+          found {{ policy_matches | length }}.
+        success_msg: >-
+          Policy metadata resolved for {{ item.control }}.
+      vars:
+        policy_matches: >-
+          {{
+            compliance_policies
+            | dict2items
+            | selectattr('value.enabled', 'equalto', true)
+            | selectattr('value.control', 'equalto', item.control)
+            | list
+          }}
+      loop: "{{ compliance_violations }}"
+      loop_control:
+        label: "{{ item.control }}"
+
+    - name: Initialize enriched compliance violation list
+      ansible.builtin.set_fact:
+        enriched_compliance_violations: []
+
+    - name: Enrich compliance violations with policy metadata
+      ansible.builtin.set_fact:
+        enriched_compliance_violations: >-
+          {{
+            enriched_compliance_violations
+            +
+            [
+              item
+              | combine(
+                  {
+                    'policy_id': policy_entry.key,
+                    'policy_name': policy_entry.value.name,
+                    'category': policy_entry.value.category,
+                    'severity': policy_entry.value.severity,
+                    'ticket_required': policy_entry.value.ticket_required,
+                    'owner': policy_entry.value.owner,
+                    'remediation': policy_entry.value.remediation
+                  },
+                  recursive=True
+                )
+            ]
+          }}
+      vars:
+        policy_matches: >-
+          {{
+            compliance_policies
+            | dict2items
+            | selectattr('value.enabled', 'equalto', true)
+            | selectattr('value.control', 'equalto', item.control)
+            | list
+          }}
+        policy_entry: "{{ policy_matches[0] }}"
+      loop: "{{ compliance_violations }}"
+      loop_control:
+        label: "{{ item.control }}"
+
+    - name: Replace compliance violations with enriched findings
+      ansible.builtin.set_fact:
+        compliance_violations: "{{ enriched_compliance_violations }}"
 
     - name: Calculate compliance totals
       ansible.builtin.set_fact:
