@@ -1,0 +1,52 @@
+---
+- name: Validate PostgreSQL persistence execution environment
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check runtime identity
+      ansible.builtin.command:
+        cmd: id
+      register: runtime_id
+      changed_when: false
+
+    - name: Check Ansible version
+      ansible.builtin.command:
+        cmd: ansible --version
+      register: ansible_version
+      changed_when: false
+
+    - name: Check PostgreSQL collection
+      ansible.builtin.command:
+        cmd: ansible-galaxy collection list community.postgresql
+      register: postgres_collection
+      changed_when: false
+
+    - name: Check psycopg2 import
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import psycopg2
+            print(psycopg2.__version__)
+      register: psycopg2_version
+      changed_when: false
+
+    - name: Assert PostgreSQL runtime dependencies
+      ansible.builtin.assert:
+        that:
+          - "'uid=1000' in runtime_id.stdout"
+          - "'community.postgresql' in postgres_collection.stdout"
+          - "'4.2.0' in postgres_collection.stdout"
+          - "'2.9.12' in psycopg2_version.stdout"
+        fail_msg: PostgreSQL persistence EE validation failed
+        success_msg: PostgreSQL persistence EE validation passed
+
+    - name: Display safe validation summary
+      ansible.builtin.debug:
+        msg:
+          - "runtime={{ runtime_id.stdout }}"
+          - "community.postgresql=4.2.0"
+          - "psycopg2={{ psycopg2_version.stdout }}"
+          - "postgresql_persistence_ee=PASS"
