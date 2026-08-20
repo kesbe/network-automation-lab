@@ -18,6 +18,7 @@
           - violations is defined
           - violations | length > 0
           - target_device in network_intent
+          - target_device in groups['all']
         fail_msg: "Invalid remediation request"
 
     - name: Validate remediation launch scope
