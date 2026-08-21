@@ -411,7 +411,7 @@
 
     - name: Build structured compliance run
       ansible.builtin.set_fact:
-        compliance_run:
+        aggregated_compliance_run:
           schema_version: "1.0"
 
           run_id: >-
@@ -457,7 +457,7 @@
         data:
           compliance_run: >-
             {{
-              compliance_run
+              aggregated_compliance_run
             }}
         per_host: false
 
