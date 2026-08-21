@@ -1,0 +1,196 @@
+---
+- name: Persist structured compliance run to PostgreSQL
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+  tasks:
+    - name: Validate inherited compliance run artifact
+      ansible.builtin.assert:
+        that:
+          - compliance_run is defined
+          - compliance_run is mapping
+          - compliance_run.schema_version is defined
+          - compliance_run.schema_version | string == '1.0'
+          - compliance_run.run_id is defined
+          - compliance_run.run_id | string | length > 0
+          - compliance_run.generated_at is defined
+          - compliance_run.generated_at | string | length > 0
+          - compliance_run.summary is defined
+          - compliance_run.summary is mapping
+          - compliance_run.device_results is defined
+          - compliance_run.device_results is sequence
+          - compliance_run.findings is defined
+          - compliance_run.findings is sequence
+          - compliance_run.critical_findings is defined
+          - compliance_run.critical_findings is sequence
+        fail_msg: >
+          Required structured compliance_run artifact is missing
+          or does not match schema version 1.0
+
+    - name: Validate inherited AWX correlation metadata
+      ansible.builtin.assert:
+        that:
+          - compliance_job_id is defined
+          - compliance_job_id | int > 0
+          - aggregator_job_id is defined
+          - aggregator_job_id | int > 0
+          - workflow_job_id is defined
+          - workflow_job_id | int > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+          - workflow_job_id | int == awx_workflow_job_id | int
+          - compliance_job_id | int != aggregator_job_id | int
+          - aggregator_job_id | int != awx_job_id | int
+        fail_msg: >
+          AWX compliance correlation metadata is missing,
+          invalid, or inconsistent with the active workflow
+
+    - name: Validate PostgreSQL credential metadata
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL persistence credential metadata is invalid
+
+    - name: Validate PostgreSQL password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL password was not injected
+      no_log: true
+
+    - name: Persist compliance run through approved PostgreSQL API
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT
+            current_user AS database_user,
+            result.*
+          FROM compliance.ingest_compliance_run(
+            %(compliance_run)s::jsonb,
+            %(workflow_job_id)s::bigint,
+            %(compliance_job_id)s::bigint,
+            %(aggregator_job_id)s::bigint,
+            %(source)s::text,
+            %(actor)s::text
+          ) AS result
+        named_args:
+          compliance_run: "{{ compliance_run | to_json }}"
+          workflow_job_id: "{{ workflow_job_id | int }}"
+          compliance_job_id: "{{ compliance_job_id | int }}"
+          aggregator_job_id: "{{ aggregator_job_id | int }}"
+          source: awx
+          actor: "awx-job-{{ awx_job_id | int }}"
+      register: compliance_persistence_query
+      no_log: true
+
+    - name: Validate PostgreSQL persistence response structure
+      ansible.builtin.assert:
+        that:
+          - compliance_persistence_query.query_all_results is defined
+          - compliance_persistence_query.query_all_results | length == 1
+          - compliance_persistence_query.query_all_results[0] | length == 1
+        fail_msg: PostgreSQL ingestion API returned an unexpected response
+
+    - name: Capture safe PostgreSQL persistence result
+      ansible.builtin.set_fact:
+        compliance_persistence_result: >-
+          {{
+            compliance_persistence_query.query_all_results[0][0]
+          }}
+
+    - name: Validate PostgreSQL persistence result
+      ansible.builtin.assert:
+        that:
+          - compliance_persistence_result.database_user == 'compliance_writer'
+          - compliance_persistence_result.result_run_id == compliance_run.run_id
+          - compliance_persistence_result.result_status in ['INSERTED', 'DUPLICATE']
+          - compliance_persistence_result.run_inserted is defined
+          - compliance_persistence_result.device_results_inserted is defined
+          - compliance_persistence_result.findings_processed is defined
+          - compliance_persistence_result.detected_count is defined
+          - compliance_persistence_result.seen_again_count is defined
+          - compliance_persistence_result.reopened_count is defined
+          - compliance_persistence_result.duplicate_finding_count is defined
+        fail_msg: PostgreSQL persistence result failed validation
+
+    - name: Publish safe compliance persistence artifact
+      ansible.builtin.set_stats:
+        data:
+          compliance_persistence:
+            run_id: "{{ compliance_persistence_result.result_run_id }}"
+            result_status: "{{ compliance_persistence_result.result_status }}"
+            run_inserted: "{{ compliance_persistence_result.run_inserted | bool }}"
+            device_results_inserted: >-
+              {{
+                compliance_persistence_result.device_results_inserted | int
+              }}
+            findings_processed: >-
+              {{
+                compliance_persistence_result.findings_processed | int
+              }}
+            detected_count: >-
+              {{
+                compliance_persistence_result.detected_count | int
+              }}
+            seen_again_count: >-
+              {{
+                compliance_persistence_result.seen_again_count | int
+              }}
+            reopened_count: >-
+              {{
+                compliance_persistence_result.reopened_count | int
+              }}
+            duplicate_finding_count: >-
+              {{
+                compliance_persistence_result.duplicate_finding_count | int
+              }}
+            workflow_job_id: "{{ workflow_job_id | int }}"
+            compliance_job_id: "{{ compliance_job_id | int }}"
+            aggregator_job_id: "{{ aggregator_job_id | int }}"
+            persistence_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+
+    - name: Report safe PostgreSQL persistence summary
+      ansible.builtin.debug:
+        msg:
+          run_id: "{{ compliance_persistence_result.result_run_id }}"
+          persistence_status: "{{ compliance_persistence_result.result_status }}"
+          run_inserted: "{{ compliance_persistence_result.run_inserted }}"
+          devices_inserted: >-
+            {{
+              compliance_persistence_result.device_results_inserted
+            }}
+          findings_processed: >-
+            {{
+              compliance_persistence_result.findings_processed
+            }}
+          detected: "{{ compliance_persistence_result.detected_count }}"
+          seen_again: "{{ compliance_persistence_result.seen_again_count }}"
+          reopened: "{{ compliance_persistence_result.reopened_count }}"
+          duplicate_findings: >-
+            {{
+              compliance_persistence_result.duplicate_finding_count
+            }}
