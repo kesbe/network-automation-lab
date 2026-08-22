@@ -1,0 +1,183 @@
+---
+- name: Prepare network compliance event for publishing
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Validate propagated compliance artifacts
+      ansible.builtin.assert:
+        that:
+          - compliance_run is defined
+          - compliance_run is mapping
+          - compliance_run.run_id is defined
+          - compliance_run.run_id | string | length > 0
+          - compliance_run.generated_at is defined
+          - compliance_run.summary is defined
+          - compliance_run.summary is mapping
+          - compliance_run.findings is defined
+          - compliance_run.findings is sequence
+          - compliance_job_id is defined
+          - compliance_job_id | int > 0
+          - aggregator_job_id is defined
+          - aggregator_job_id | int > 0
+          - workflow_job_id is defined
+          - workflow_job_id | int > 0
+        fail_msg: >-
+          Required compliance aggregation artifacts are
+          missing or invalid.
+
+    - name: Validate AWX workflow correlation
+      ansible.builtin.assert:
+        that:
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+          - workflow_job_id | int == awx_workflow_job_id | int
+          - aggregator_job_id | int != awx_job_id | int
+          - compliance_job_id | int != awx_job_id | int
+        fail_msg: >-
+          Publisher workflow correlation contract failed.
+
+    - name: Build synthetic aggregator job envelope
+      ansible.builtin.set_fact:
+        publisher_input_envelope:
+          id: "{{ aggregator_job_id | int }}"
+          status: successful
+          artifacts:
+            compliance_run: "{{ compliance_run }}"
+            compliance_job_id: "{{ compliance_job_id | int }}"
+            aggregator_job_id: "{{ aggregator_job_id | int }}"
+            workflow_job_id: "{{ workflow_job_id | int }}"
+
+    - name: Initialize publisher event object
+      ansible.builtin.set_fact:
+        publisher_event_object: {}
+
+    - name: Run publisher adapter with transport disabled
+      block:
+        - name: Create publisher working directory
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: network-compliance-publisher
+          register: publisher_tempdir
+
+        - name: Write synthetic aggregator input
+          ansible.builtin.copy:
+            dest: "{{ publisher_tempdir.path }}/aggregator.json"
+            content: >-
+              {{
+                publisher_input_envelope
+                | to_nice_json
+              }}
+            mode: "0600"
+
+        - name: Execute offline publisher adapter
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/../scripts/run_network_compliance_publisher.py"
+              - --input
+              - "{{ publisher_tempdir.path }}/aggregator.json"
+              - --output
+              - "{{ publisher_tempdir.path }}/event.json"
+              - --transport
+              - disabled
+          register: publisher_command
+          changed_when: false
+
+        - name: Check for generated event
+          ansible.builtin.stat:
+            path: "{{ publisher_tempdir.path }}/event.json"
+          register: publisher_event_stat
+
+        - name: Read generated event
+          ansible.builtin.slurp:
+            src: "{{ publisher_tempdir.path }}/event.json"
+          register: publisher_event_raw
+          when: publisher_event_stat.stat.exists
+
+        - name: Decode generated event
+          ansible.builtin.set_fact:
+            publisher_event_object: >-
+              {{
+                publisher_event_raw.content
+                | b64decode
+                | from_json
+              }}
+          when: publisher_event_stat.stat.exists
+
+        - name: Derive publisher decision
+          ansible.builtin.set_fact:
+            publisher_decision_value: >-
+              {{
+                'EVENT_READY'
+                if publisher_event_stat.stat.exists
+                else 'NO_EVENT'
+              }}
+
+        - name: Validate offline publisher safety
+          ansible.builtin.assert:
+            that:
+              - publisher_command.rc == 0
+              - "'publisher_offline_result=PASS' in publisher_command.stdout"
+              - "'publish_attempted=NO' in publisher_command.stdout"
+              - "'kafka_contact_attempted=NO' in publisher_command.stdout"
+              - >-
+                (
+                  publisher_decision_value == 'EVENT_READY'
+                  and
+                  'publisher_decision=EVENT_READY'
+                  in publisher_command.stdout
+                )
+                or
+                (
+                  publisher_decision_value == 'NO_EVENT'
+                  and
+                  'publisher_decision=NO_EVENT'
+                  in publisher_command.stdout
+                )
+            fail_msg: >-
+              Offline publisher adapter contract failed.
+
+        - name: Publish workflow statistics
+          ansible.builtin.set_stats:
+            per_host: false
+            data:
+              publisher_decision: "{{ publisher_decision_value }}"
+              publisher_transport_mode: DISABLED
+              publisher_publish_attempted: false
+              publisher_kafka_contact_attempted: false
+              publisher_job_id: "{{ awx_job_id | int }}"
+              publisher_compliance_job_id: "{{ compliance_job_id | int }}"
+              publisher_aggregator_job_id: "{{ aggregator_job_id | int }}"
+              publisher_workflow_job_id: "{{ workflow_job_id | int }}"
+              publisher_compliance_run_id: "{{ compliance_run.run_id }}"
+              publisher_event_id: >-
+                {{
+                  publisher_event_object.event_id
+                  | default('')
+                }}
+              publisher_event_type: >-
+                {{
+                  publisher_event_object.event_type
+                  | default('')
+                }}
+              publisher_finding_count: >-
+                {{
+                  (
+                    publisher_event_object.findings
+                    | default([])
+                  )
+                  | length
+                }}
+
+      always:
+        - name: Remove publisher working directory
+          ansible.builtin.file:
+            path: "{{ publisher_tempdir.path }}"
+            state: absent
+          when:
+            - publisher_tempdir is defined
+            - publisher_tempdir.path is defined
