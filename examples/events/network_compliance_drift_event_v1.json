@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "event_id": "eda-production-contract-example-0001",
+  "event_type": "NETWORK_COMPLIANCE_DRIFT_DETECTED",
+  "occurred_at": "2026-08-22T08:45:00Z",
+  "producer": {
+    "system": "awx",
+    "component": "network-compliance-detector",
+    "job_id": 1001
+  },
+  "correlation": {
+    "compliance_run_id": "contract-example-run-0001",
+    "compliance_job_id": 1001,
+    "aggregator_job_id": 1002
+  },
+  "summary": {
+    "devices_evaluated": 4,
+    "devices_noncompliant": 1,
+    "findings_total": 1,
+    "findings_critical": 0
+  },
+  "findings": [
+    {
+      "finding_id": "finding-c4773cf087b147948a8f",
+      "fingerprint": "leaf01|NET-BGP-002|device",
+      "device": "leaf01",
+      "policy_id": "NET-BGP-002",
+      "severity": "high",
+      "ticket_required": false,
+      "remediation_mode": "auto",
+      "observed": {
+        "maximum_paths": 1
+      },
+      "expected": {
+        "maximum_paths": 2
+      }
+    }
+  ]
+}

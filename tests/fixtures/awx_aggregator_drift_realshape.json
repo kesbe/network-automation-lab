@@ -1,0 +1,48 @@
+{
+  "artifacts": {
+    "aggregator_job_id": "531",
+    "compliance_job_id": "529",
+    "compliance_run": {
+      "findings": [
+        {
+          "actual": "missing or different",
+          "category": "routing",
+          "control": "maximum_paths",
+          "device": "leaf01",
+          "device_status": "NON-COMPLIANT",
+          "expected": 2,
+          "finding_fingerprint": "leaf01|NET-BGP-002|device",
+          "finding_id": "finding-c4773cf087b147948a8f",
+          "finding_scope": "device",
+          "owner": "network_operations",
+          "policy_id": "NET-BGP-002",
+          "policy_name": "BGP ECMP maximum paths",
+          "remediation": {
+            "mode": "auto",
+            "risk": "low",
+            "supported": true
+          },
+          "severity": "high",
+          "ticket_required": false
+        }
+      ],
+      "generated_at": "2026-08-21T18:18:32Z",
+      "run_id": "compliance-43c5eacb-51b2-4580-b831-32dd05097585",
+      "schema_version": "1.0",
+      "summary": {
+        "critical_findings": 0,
+        "devices_checked": 4,
+        "devices_compliant": 3,
+        "devices_noncompliant": 1,
+        "high_findings": 1,
+        "info_findings": 0,
+        "low_findings": 0,
+        "medium_findings": 0,
+        "total_findings": 1
+      }
+    },
+    "workflow_job_id": "526"
+  },
+  "id": 531,
+  "status": "successful"
+}

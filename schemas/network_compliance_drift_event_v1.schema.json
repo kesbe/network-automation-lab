@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:network-automation:event:network-compliance-drift-detected:1.0",
+  "title": "Network Compliance Drift Detected Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "producer",
+    "correlation",
+    "summary",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 16
+    },
+    "event_type": {
+      "const": "NETWORK_COMPLIANCE_DRIFT_DETECTED"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system",
+        "component"
+      ],
+      "properties": {
+        "system": {
+          "const": "awx"
+        },
+        "component": {
+          "const": "network-compliance-detector"
+        },
+        "job_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compliance_run_id",
+        "compliance_job_id",
+        "aggregator_job_id"
+      ],
+      "properties": {
+        "compliance_run_id": {
+          "type": "string",
+          "minLength": 8
+        },
+        "compliance_job_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "aggregator_job_id": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "devices_evaluated",
+        "devices_noncompliant",
+        "findings_total",
+        "findings_critical"
+      ],
+      "properties": {
+        "devices_evaluated": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "devices_noncompliant": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "findings_total": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "findings_critical": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_id",
+          "fingerprint",
+          "device",
+          "policy_id",
+          "severity",
+          "ticket_required",
+          "remediation_mode"
+        ],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "pattern": "^finding-[a-f0-9]{20}$"
+          },
+          "fingerprint": {
+            "type": "string",
+            "minLength": 3
+          },
+          "device": {
+            "type": "string",
+            "minLength": 1
+          },
+          "policy_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "info"
+            ]
+          },
+          "ticket_required": {
+            "type": "boolean"
+          },
+          "remediation_mode": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observed": {},
+          "expected": {}
+        }
+      }
+    }
+  }
+}

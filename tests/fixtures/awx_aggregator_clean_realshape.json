@@ -1,0 +1,26 @@
+{
+  "artifacts": {
+    "aggregator_job_id": "541",
+    "compliance_job_id": "539",
+    "compliance_run": {
+      "findings": [],
+      "generated_at": "2026-08-21T18:19:20Z",
+      "run_id": "compliance-fb84f1ef-dd83-4d89-8175-058c0304c169",
+      "schema_version": "1.0",
+      "summary": {
+        "critical_findings": 0,
+        "devices_checked": 4,
+        "devices_compliant": 4,
+        "devices_noncompliant": 0,
+        "high_findings": 0,
+        "info_findings": 0,
+        "low_findings": 0,
+        "medium_findings": 0,
+        "total_findings": 0
+      }
+    },
+    "workflow_job_id": "526"
+  },
+  "id": 541,
+  "status": "successful"
+}
