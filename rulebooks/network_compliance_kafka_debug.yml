@@ -1,0 +1,26 @@
+---
+- name: Network Compliance Kafka Debug
+  hosts: localhost
+
+  sources:
+    - name: Network compliance Kafka events
+      ansible.eda.kafka:
+        host: network-automation-kafka-kafka-bootstrap.kafka.svc
+        port: 9092
+        topic: network.compliance.events
+        group_id: eda-network-compliance-debug
+        offset: latest
+
+  rules:
+    - name: Match network compliance EDA debug event
+      condition: >
+        event.body.event_type == "COMPLIANCE_VIOLATION_EDA_TEST"
+
+      action:
+        debug:
+          msg: >-
+            NETWORK_COMPLIANCE_KAFKA_DEBUG
+            event_id={{ event.body.event_id }}
+            device={{ event.body.device }}
+            policy_id={{ event.body.policy_id }}
+            severity={{ event.body.severity }}
