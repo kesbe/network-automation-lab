@@ -1,0 +1,124 @@
+---
+- name: Fail network compliance transport event
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+    transport_failure_reason_effective: >-
+      {{
+        transport_failure_reason
+        | default('AWX remediation workflow failed')
+      }}
+
+  tasks:
+    - name: Validate transport failure input
+      ansible.builtin.assert:
+        that:
+          - transport_event_id is defined
+          - transport_event_id | string | length > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+          - transport_failure_reason_effective | string | length > 0
+        fail_msg: >
+          Transport failure metadata or AWX workflow correlation is invalid.
+
+    - name: Validate PostgreSQL credential metadata
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL transport credential metadata is invalid.
+
+    - name: Validate PostgreSQL password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL password was not injected.
+      no_log: true
+
+    - name: Fail transport event through approved PostgreSQL API
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT compliance.fail_transport_event(
+            %(event_id)s::text,
+            %(workflow_job_id)s::bigint,
+            %(error_message)s::text
+          ) AS result;
+        named_args:
+          event_id: "{{ transport_event_id }}"
+          workflow_job_id: "{{ awx_workflow_job_id | int }}"
+          error_message: "{{ transport_failure_reason_effective }}"
+      register: transport_fail_query
+      no_log: true
+
+    - name: Validate transport failure response
+      ansible.builtin.assert:
+        that:
+          - transport_fail_query.query_all_results is defined
+          - transport_fail_query.query_all_results | length == 1
+          - transport_fail_query.query_all_results[0] | length == 1
+          - transport_fail_query.query_all_results[0][0].result is defined
+        fail_msg: PostgreSQL transport failure API returned an unexpected response.
+
+    - name: Capture raw transport failure result
+      ansible.builtin.set_fact:
+        transport_fail_result_raw: >-
+          {{
+            transport_fail_query.query_all_results[0][0].result
+          }}
+
+    - name: Normalize transport failure result
+      ansible.builtin.set_fact:
+        transport_fail_result: >-
+          {{
+            transport_fail_result_raw
+            if transport_fail_result_raw is mapping
+            else
+            (transport_fail_result_raw | from_json)
+          }}
+
+    - name: Validate transport failure decision
+      ansible.builtin.assert:
+        that:
+          - transport_fail_result is mapping
+          - transport_fail_result.event_id == transport_event_id
+          - transport_fail_result.decision in ['FAILED', 'ALREADY_FAILED']
+        fail_msg: PostgreSQL transport failure decision failed validation.
+
+    - name: Publish safe transport failure artifact
+      ansible.builtin.set_stats:
+        data:
+          transport_failure:
+            event_id: "{{ transport_fail_result.event_id }}"
+            decision: "{{ transport_fail_result.decision }}"
+            wrapper_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+            failure_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+
+    - name: Report transport failure persistence
+      ansible.builtin.debug:
+        msg:
+          event_id: "{{ transport_fail_result.event_id }}"
+          decision: "{{ transport_fail_result.decision }}"

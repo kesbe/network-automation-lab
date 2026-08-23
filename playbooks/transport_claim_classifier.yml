@@ -1,0 +1,50 @@
+---
+- name: Classify non-executable transport claim
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Require inherited transport claim artifact
+      ansible.builtin.assert:
+        that:
+          - transport_claim is defined
+          - transport_claim is mapping
+          - transport_claim.event_id is defined
+          - transport_claim.event_id | string | length > 0
+          - transport_claim.decision is defined
+        fail_msg: >
+          Claim failure cannot be classified because the transport
+          claim artifact is missing or invalid.
+
+    - name: Reject stale claim for reconciliation
+      ansible.builtin.fail:
+        msg: >-
+          Transport event requires stale-claim reconciliation:
+          event_id={{ transport_claim.event_id }}
+      when:
+        - transport_claim.decision == 'STALE_CLAIM'
+
+    - name: Reject unexpected claim failure
+      ansible.builtin.fail:
+        msg: >-
+          Unexpected transport claim failure:
+          decision={{ transport_claim.decision }}
+          event_id={{ transport_claim.event_id }}
+      when:
+        - transport_claim.decision not in
+          [
+            'DUPLICATE_INFLIGHT',
+            'DUPLICATE_COMPLETED',
+            'STALE_CLAIM'
+          ]
+
+    - name: Report safely suppressed duplicate
+      ansible.builtin.debug:
+        msg:
+          event_id: "{{ transport_claim.event_id }}"
+          decision: "{{ transport_claim.decision }}"
+          remediation_launched: false
+      when:
+        - transport_claim.decision in
+          ['DUPLICATE_INFLIGHT', 'DUPLICATE_COMPLETED']

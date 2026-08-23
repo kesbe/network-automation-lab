@@ -1,0 +1,116 @@
+---
+- name: Complete network compliance transport event
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+  tasks:
+    - name: Validate transport completion input
+      ansible.builtin.assert:
+        that:
+          - transport_event_id is defined
+          - transport_event_id | string | length > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+        fail_msg: >
+          Transport completion metadata or AWX workflow correlation is invalid.
+
+    - name: Validate PostgreSQL credential metadata
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL transport credential metadata is invalid.
+
+    - name: Validate PostgreSQL password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL password was not injected.
+      no_log: true
+
+    - name: Complete transport event through approved PostgreSQL API
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT compliance.complete_transport_event(
+            %(event_id)s::text,
+            %(workflow_job_id)s::bigint
+          ) AS result;
+        named_args:
+          event_id: "{{ transport_event_id }}"
+          workflow_job_id: "{{ awx_workflow_job_id | int }}"
+      register: transport_complete_query
+      no_log: true
+
+    - name: Validate transport completion response
+      ansible.builtin.assert:
+        that:
+          - transport_complete_query.query_all_results is defined
+          - transport_complete_query.query_all_results | length == 1
+          - transport_complete_query.query_all_results[0] | length == 1
+          - transport_complete_query.query_all_results[0][0].result is defined
+        fail_msg: PostgreSQL transport completion API returned an unexpected response.
+
+    - name: Capture raw transport completion result
+      ansible.builtin.set_fact:
+        transport_complete_result_raw: >-
+          {{
+            transport_complete_query.query_all_results[0][0].result
+          }}
+
+    - name: Normalize transport completion result
+      ansible.builtin.set_fact:
+        transport_complete_result: >-
+          {{
+            transport_complete_result_raw
+            if transport_complete_result_raw is mapping
+            else
+            (transport_complete_result_raw | from_json)
+          }}
+
+    - name: Validate transport completion decision
+      ansible.builtin.assert:
+        that:
+          - transport_complete_result is mapping
+          - transport_complete_result.event_id == transport_event_id
+          - transport_complete_result.decision in
+            ['COMPLETED', 'ALREADY_COMPLETED']
+        fail_msg: PostgreSQL transport completion decision failed validation.
+
+    - name: Publish safe transport completion artifact
+      ansible.builtin.set_stats:
+        data:
+          transport_completion:
+            event_id: "{{ transport_complete_result.event_id }}"
+            decision: "{{ transport_complete_result.decision }}"
+            wrapper_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+            completion_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+
+    - name: Report transport completion
+      ansible.builtin.debug:
+        msg:
+          event_id: "{{ transport_complete_result.event_id }}"
+          decision: "{{ transport_complete_result.decision }}"

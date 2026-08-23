@@ -1,0 +1,172 @@
+---
+- name: Claim network compliance transport event
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+    transport_lease_seconds_effective: >-
+      {{
+        transport_lease_seconds | default(600) | int
+      }}
+
+  tasks:
+    - name: Validate transport event input
+      ansible.builtin.assert:
+        that:
+          - transport_event_id is defined
+          - transport_event_id | string | length > 0
+          - transport_event_type is defined
+          - transport_event_type | string == 'NETWORK_COMPLIANCE_DRIFT_DETECTED'
+          - compliance_run_id is defined
+          - compliance_run_id | string | length > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+          - transport_lease_seconds_effective | int >= 60
+          - transport_lease_seconds_effective | int <= 86400
+        fail_msg: >
+          Transport event metadata or AWX workflow correlation is invalid.
+
+    - name: Validate PostgreSQL credential metadata
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL transport credential metadata is invalid.
+
+    - name: Validate PostgreSQL password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL password was not injected.
+      no_log: true
+
+    - name: Atomically claim transport event
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT compliance.claim_transport_event(
+            %(event_id)s::text,
+            %(event_type)s::text,
+            %(compliance_run_id)s::text,
+            %(workflow_job_id)s::bigint,
+            %(lease_seconds)s::integer,
+            %(details)s::jsonb
+          ) AS result;
+        named_args:
+          event_id: "{{ transport_event_id }}"
+          event_type: "{{ transport_event_type }}"
+          compliance_run_id: "{{ compliance_run_id }}"
+          workflow_job_id: "{{ awx_workflow_job_id | int }}"
+          lease_seconds: "{{ transport_lease_seconds_effective | int }}"
+          details: >-
+            {{
+              {
+                'source': 'awx',
+                'claim_job_id': awx_job_id | int,
+                'wrapper_workflow_job_id': awx_workflow_job_id | int
+              } | to_json
+            }}
+      register: transport_claim_query
+      no_log: true
+
+    - name: Validate transport claim response structure
+      ansible.builtin.assert:
+        that:
+          - transport_claim_query.query_all_results is defined
+          - transport_claim_query.query_all_results | length == 1
+          - transport_claim_query.query_all_results[0] | length == 1
+          - transport_claim_query.query_all_results[0][0].result is defined
+        fail_msg: PostgreSQL transport claim API returned an unexpected response.
+
+    - name: Capture raw transport claim result
+      ansible.builtin.set_fact:
+        transport_claim_result_raw: >-
+          {{
+            transport_claim_query.query_all_results[0][0].result
+          }}
+
+    - name: Normalize transport claim result
+      ansible.builtin.set_fact:
+        transport_claim_result: >-
+          {{
+            transport_claim_result_raw
+            if transport_claim_result_raw is mapping
+            else
+            (transport_claim_result_raw | from_json)
+          }}
+
+    - name: Validate transport claim decision
+      ansible.builtin.assert:
+        that:
+          - transport_claim_result is mapping
+          - transport_claim_result.event_id == transport_event_id
+          - transport_claim_result.state is defined
+          - transport_claim_result.decision is defined
+          - transport_claim_result.decision in
+            [
+              'CLAIMED_NEW',
+              'CLAIMED_RETRY',
+              'DUPLICATE_INFLIGHT',
+              'DUPLICATE_COMPLETED',
+              'STALE_CLAIM'
+            ]
+        fail_msg: PostgreSQL transport claim decision failed validation.
+
+    - name: Publish safe transport claim artifact
+      ansible.builtin.set_stats:
+        data:
+          transport_claim:
+            event_id: "{{ transport_claim_result.event_id }}"
+            event_type: "{{ transport_event_type }}"
+            compliance_run_id: "{{ compliance_run_id }}"
+            state: "{{ transport_claim_result.state }}"
+            decision: "{{ transport_claim_result.decision }}"
+            attempt_count: "{{ transport_claim_result.attempt_count | int }}"
+            duplicate_count: "{{ transport_claim_result.duplicate_count | int }}"
+            claim_workflow_job_id: >-
+              {{
+                transport_claim_result.claim_workflow_job_id | int
+              }}
+            wrapper_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+            claim_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+
+    - name: Report executable transport claim
+      ansible.builtin.debug:
+        msg:
+          event_id: "{{ transport_claim_result.event_id }}"
+          decision: "{{ transport_claim_result.decision }}"
+          attempt_count: "{{ transport_claim_result.attempt_count }}"
+          duplicate_count: "{{ transport_claim_result.duplicate_count }}"
+      when:
+        - transport_claim_result.decision in ['CLAIMED_NEW', 'CLAIMED_RETRY']
+
+    - name: Stop remediation for non-executable transport decision
+      ansible.builtin.fail:
+        msg: >-
+          Transport remediation execution refused:
+          decision={{ transport_claim_result.decision }}
+          event_id={{ transport_claim_result.event_id }}
+      when:
+        - transport_claim_result.decision not in ['CLAIMED_NEW', 'CLAIMED_RETRY']
