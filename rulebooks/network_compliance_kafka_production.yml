@@ -1,0 +1,41 @@
+---
+- name: Network Compliance Kafka Production
+  hosts: localhost
+
+  sources:
+    - name: Network compliance production events
+      ansible.eda.kafka:
+        host: network-automation-kafka-kafka-bootstrap.kafka.svc
+        port: 9092
+        topic: network.compliance.events
+        group_id: eda-network-compliance-production-v1
+        offset: latest
+
+  rules:
+    - name: Launch governed network compliance remediation workflow
+      condition: >
+        event.body.event_type ==
+        "NETWORK_COMPLIANCE_DRIFT_DETECTED"
+
+      action:
+        run_workflow_template:
+          name: "WF02-NB - FRR Closed-Loop Remediation - NetBox"
+          organization: "Default"
+
+          # WF40 does not prompt for extra variables.
+          # Kafka is the trigger signal only; WF40 performs
+          # its own fresh compliance/remediation lifecycle.
+          include_events: false
+          job_args: {}
+
+          # Never allow the EDA action layer to launch
+          # a second workflow automatically.
+          retry: false
+          retries: 0
+          delay: 0
+
+          # Do not feed workflow completion/state back
+          # into this production ruleset.
+          set_facts: false
+          post_events: false
+          add_event_uuid_label: false
