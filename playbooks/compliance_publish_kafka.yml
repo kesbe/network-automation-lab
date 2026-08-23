@@ -1,0 +1,294 @@
+---
+- name: Publish network compliance run to Kafka
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars:
+    kafka_publish_enabled: false
+    kafka_bootstrap_servers: ""
+    kafka_publisher_client_id: "network-compliance-awx-publisher"
+
+  tasks:
+    - name: Validate propagated compliance artifacts
+      ansible.builtin.assert:
+        that:
+          - "compliance_run is defined"
+          - "compliance_run is mapping"
+          - "compliance_run.run_id is defined"
+          - "compliance_run.run_id | string | length > 0"
+          - "compliance_job_id is defined"
+          - "compliance_job_id | int > 0"
+          - "aggregator_job_id is defined"
+          - "aggregator_job_id | int > 0"
+          - "workflow_job_id is defined"
+          - "workflow_job_id | int > 0"
+        fail_msg: >-
+          Required compliance aggregation artifacts are missing
+          or invalid.
+
+    - name: Validate AWX publisher correlation
+      ansible.builtin.assert:
+        that:
+          - "awx_job_id is defined"
+          - "awx_job_id | int > 0"
+          - "awx_workflow_job_id is defined"
+          - "awx_workflow_job_id | int > 0"
+          - "workflow_job_id | int == awx_workflow_job_id | int"
+          - "aggregator_job_id | int != awx_job_id | int"
+          - "compliance_job_id | int != awx_job_id | int"
+        fail_msg: >-
+          Publisher job correlation does not match the
+          upstream aggregator workflow contract.
+
+    - name: Validate Kafka runtime configuration when enabled
+      ansible.builtin.assert:
+        that:
+          - "kafka_bootstrap_servers is string"
+          - "kafka_bootstrap_servers | trim | length > 0"
+          - "kafka_publisher_client_id is string"
+          - "kafka_publisher_client_id | trim | length > 0"
+        fail_msg: >-
+          Kafka publishing is enabled but runtime Kafka
+          configuration is missing.
+      when:
+        - kafka_publish_enabled | bool
+
+    - name: Initialize publisher result
+      ansible.builtin.set_fact:
+        kafka_publisher_decision: "DISABLED"
+        kafka_publisher_record_published: false
+        kafka_publisher_event_id: ""
+        kafka_publisher_event_type: ""
+        kafka_publisher_partition: ""
+        kafka_publisher_offset: ""
+
+    - name: Execute production Kafka publisher
+      when:
+        - kafka_publish_enabled | bool
+      block:
+        - name: Create temporary publisher workspace
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: compliance-kafka-publisher-
+          register: kafka_publisher_workdir
+
+        - name: Build synthetic upstream aggregator job envelope
+          ansible.builtin.copy:
+            dest: "{{ kafka_publisher_workdir.path }}/aggregator_job.json"
+            mode: "0600"
+            content: >-
+              {{
+                {
+                  "id": (aggregator_job_id | int),
+                  "status": "successful",
+                  "artifacts": {
+                    "compliance_run": compliance_run,
+                    "compliance_job_id": (compliance_job_id | int),
+                    "aggregator_job_id": (aggregator_job_id | int),
+                    "workflow_job_id": (workflow_job_id | int)
+                  }
+                }
+                | to_nice_json
+              }}
+
+        - name: Publish compliance event through production adapter
+          ansible.builtin.command:
+            argv:
+              - python3
+              - "{{ playbook_dir }}/../scripts/run_network_compliance_kafka_publisher.py"
+              - --input
+              - "{{ kafka_publisher_workdir.path }}/aggregator_job.json"
+              - --output
+              - "{{ kafka_publisher_workdir.path }}/event.json"
+              - --bootstrap-servers
+              - "{{ kafka_bootstrap_servers }}"
+              - --client-id
+              - "{{ kafka_publisher_client_id }}"
+          register: kafka_publisher_command
+          changed_when: >-
+            'kafka_record_published=YES'
+            in kafka_publisher_command.stdout
+
+        - name: Validate production publisher result
+          ansible.builtin.assert:
+            that:
+              - "kafka_publisher_command.rc == 0"
+              - >-
+                'production_publisher_result=PASS'
+                in kafka_publisher_command.stdout
+              - >-
+                (
+                  'production_publisher_decision=NO_EVENT'
+                  in kafka_publisher_command.stdout
+                )
+                or
+                (
+                  'production_publisher_decision=EVENT_PUBLISHED'
+                  in kafka_publisher_command.stdout
+                )
+              - >-
+                'production_publisher_result=FAIL'
+                not in kafka_publisher_command.stdout
+            fail_msg: >-
+              Production Kafka compliance publisher failed
+              its execution contract.
+
+        - name: Capture publisher decision
+          ansible.builtin.set_fact:
+            kafka_publisher_decision: >-
+              {{
+                'EVENT_PUBLISHED'
+                if
+                'production_publisher_decision=EVENT_PUBLISHED'
+                in kafka_publisher_command.stdout
+                else
+                'NO_EVENT'
+              }}
+
+            kafka_publisher_record_published: >-
+              {{
+                'kafka_record_published=YES'
+                in kafka_publisher_command.stdout
+              }}
+
+            kafka_publisher_event_id: >-
+              {{
+                (
+                  kafka_publisher_command.stdout
+                  | regex_search(
+                      '(?m)^published_event_id=[^\\n]+'
+                    )
+                  | default('', true)
+                  | regex_replace(
+                      '^published_event_id=',
+                      ''
+                    )
+                )
+              }}
+
+            kafka_publisher_partition: >-
+              {{
+                (
+                  kafka_publisher_command.stdout
+                  | regex_search(
+                      '(?m)^published_partition=[^\\n]+'
+                    )
+                  | default('', true)
+                  | regex_replace(
+                      '^published_partition=',
+                      ''
+                    )
+                )
+              }}
+
+            kafka_publisher_offset: >-
+              {{
+                (
+                  kafka_publisher_command.stdout
+                  | regex_search(
+                      '(?m)^published_offset=[^\\n]+'
+                    )
+                  | default('', true)
+                  | regex_replace(
+                      '^published_offset=',
+                      ''
+                    )
+                )
+              }}
+
+        - name: Set event type when a Kafka event was published
+          ansible.builtin.set_fact:
+            kafka_publisher_event_type: >-
+              {{
+                'NETWORK_COMPLIANCE_DRIFT_DETECTED'
+                if kafka_publisher_record_published | bool
+                else ''
+              }}
+
+        - name: Validate clean-run no-publish result
+          ansible.builtin.assert:
+            that:
+              - "not kafka_publisher_record_published | bool"
+              - "kafka_publisher_event_id | length == 0"
+          when:
+            - kafka_publisher_decision == "NO_EVENT"
+
+        - name: Validate drift delivery receipt
+          ansible.builtin.assert:
+            that:
+              - "kafka_publisher_record_published | bool"
+              - "kafka_publisher_event_id | length > 0"
+              - "kafka_publisher_partition | string | length > 0"
+              - "kafka_publisher_offset | string | length > 0"
+          when:
+            - kafka_publisher_decision == "EVENT_PUBLISHED"
+
+      always:
+        - name: Remove temporary publisher workspace
+          ansible.builtin.file:
+            path: >-
+              {{
+                kafka_publisher_workdir.path
+                if kafka_publisher_workdir is defined
+                else '/tmp/nonexistent-compliance-kafka-publisher'
+              }}
+            state: absent
+
+    - name: Export Kafka publisher artifacts
+      ansible.builtin.set_stats:
+        data:
+          publisher_decision: "{{ kafka_publisher_decision }}"
+
+          publisher_transport_mode: >-
+            {{
+              'KAFKA'
+              if kafka_publish_enabled | bool
+              else 'DISABLED'
+            }}
+
+          publisher_publish_attempted: >-
+            {{
+              kafka_publisher_record_published
+              | bool
+            }}
+
+          publisher_kafka_contact_attempted: >-
+            {{
+              kafka_publisher_record_published
+              | bool
+            }}
+
+          publisher_job_id: "{{ awx_job_id | int }}"
+
+          publisher_compliance_job_id: >-
+            {{ compliance_job_id | int }}
+
+          publisher_aggregator_job_id: >-
+            {{ aggregator_job_id | int }}
+
+          publisher_workflow_job_id: >-
+            {{ workflow_job_id | int }}
+
+          publisher_compliance_run_id: >-
+            {{ compliance_run.run_id }}
+
+          publisher_event_id: >-
+            {{ kafka_publisher_event_id }}
+
+          publisher_event_type: >-
+            {{ kafka_publisher_event_type }}
+
+          publisher_finding_count: >-
+            {{
+              compliance_run.findings
+              | default([])
+              | length
+            }}
+
+          publisher_kafka_partition: >-
+            {{ kafka_publisher_partition }}
+
+          publisher_kafka_offset: >-
+            {{ kafka_publisher_offset }}
+        per_host: false
