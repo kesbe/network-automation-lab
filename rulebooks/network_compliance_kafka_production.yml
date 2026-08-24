@@ -12,21 +12,25 @@
         offset: latest
 
   rules:
-    - name: Launch governed network compliance remediation workflow
+    - name: Launch governed durable network compliance transport workflow
       condition: >
         event.body.event_type ==
         "NETWORK_COMPLIANCE_DRIFT_DETECTED"
 
       action:
         run_workflow_template:
-          name: "WF02-NB - FRR Closed-Loop Remediation - NetBox"
+          name: "WF03-T-NB - Durable Compliance Transport Wrapper"
           organization: "Default"
 
-          # WF40 does not prompt for extra variables.
-          # Kafka is the trigger signal only; WF40 performs
-          # its own fresh compliance/remediation lifecycle.
+          # The wrapper requires the durable transport identity.
+          # Only the validated event identity/correlation fields
+          # are injected into AWX.
           include_events: false
-          job_args: {}
+          job_args:
+            extra_vars:
+              transport_event_id: "{{ event.body.event_id }}"
+              transport_event_type: "{{ event.body.event_type }}"
+              compliance_run_id: "{{ event.body.correlation.compliance_run_id }}"
 
           # Never allow the EDA action layer to launch
           # a second workflow automatically.
