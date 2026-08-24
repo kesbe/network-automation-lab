@@ -143,6 +143,10 @@
           - stale_transport_result is mapping
           - stale_transport_result.decision == 'STALE_CANDIDATE'
           - stale_transport_result.event_id == transport_event_id
+          - stale_transport_result.event_type is defined
+          - stale_transport_result.event_type == 'NETWORK_COMPLIANCE_DRIFT_DETECTED'
+          - stale_transport_result.compliance_run_id is defined
+          - stale_transport_result.compliance_run_id | string | trim | length > 0
           - stale_transport_result.state == 'CLAIMED'
           - stale_transport_result.claim_workflow_job_id | int == transport_expected_workflow_job_id | int
         fail_msg: Transport event is not an eligible stale reconciliation candidate.
@@ -379,8 +383,24 @@
     - name: Publish safe reconciliation artifact
       ansible.builtin.set_stats:
         data:
+          transport_event_id: "{{ stale_transport_result.event_id }}"
+          transport_event_type: "{{ stale_transport_result.event_type }}"
+          compliance_run_id: "{{ stale_transport_result.compliance_run_id }}"
+
+          transport_claim:
+            event_id: "{{ stale_transport_result.event_id }}"
+            event_type: "{{ stale_transport_result.event_type }}"
+            compliance_run_id: "{{ stale_transport_result.compliance_run_id }}"
+            state: "{{ transport_reclaim_result.state }}"
+            decision: "{{ transport_reclaim_result.decision }}"
+            attempt_count: "{{ transport_reclaim_result.attempt_count | int }}"
+            duplicate_count: "{{ transport_reclaim_result.duplicate_count | int }}"
+            claim_workflow_job_id: "{{ transport_reclaim_result.claim_workflow_job_id | int }}"
+            wrapper_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+            claim_job_id: "{{ awx_job_id | int }}"
+
           transport_reconciliation:
-            event_id: "{{ transport_reclaim_result.event_id }}"
+            event_id: "{{ stale_transport_result.event_id }}"
             decision: "{{ transport_reclaim_result.decision }}"
             previous_workflow_job_id: "{{ transport_expected_workflow_job_id | int }}"
             recovery_workflow_job_id: "{{ awx_workflow_job_id | int }}"
