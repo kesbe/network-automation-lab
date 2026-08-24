@@ -41,6 +41,13 @@
       - error
       - canceled
 
+    safe_previous_descendant_terminal_states:
+      - successful
+      - failed
+      - error
+      - canceled
+      - skipped
+
   tasks:
     - name: Validate reconciliation input
       ansible.builtin.assert:
@@ -164,6 +171,146 @@
           - previous_awx_workflow.json.status in safe_previous_workflow_terminal_states
           - previous_awx_workflow.json.finished is not none
         fail_msg: Previous transport owner is not safe for automatic reconciliation.
+
+    - name: Read previous AWX workflow nodes
+      ansible.builtin.uri:
+        url: >-
+          {{
+            awx_api_url | regex_replace('/+$', '')
+          }}/api/v2/workflow_jobs/{{ transport_expected_workflow_job_id | int }}/workflow_nodes/?page_size=200
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_api_token }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: previous_awx_workflow_nodes
+      no_log: true
+
+    - name: Validate previous AWX workflow node response
+      ansible.builtin.assert:
+        that:
+          - previous_awx_workflow_nodes.json is mapping
+          - previous_awx_workflow_nodes.json.results is defined
+          - previous_awx_workflow_nodes.json.results is sequence
+          - previous_awx_workflow_nodes.json.next is none
+          - previous_awx_workflow_nodes.json.count | int == previous_awx_workflow_nodes.json.results | length
+        fail_msg: >-
+          Previous transport owner workflow-node response is incomplete
+          or paginated; automatic reconciliation refused.
+
+    - name: Validate executed direct descendant state
+      ansible.builtin.assert:
+        that:
+          - item.summary_fields is mapping
+          - item.summary_fields.job is mapping
+          - item.summary_fields.job.type is defined
+          - item.summary_fields.job.status is defined
+          - item.summary_fields.job.status in safe_previous_descendant_terminal_states
+        fail_msg: >-
+          Previous transport owner has an active or ambiguous direct
+          descendant; automatic reconciliation refused.
+      loop: "{{ previous_awx_workflow_nodes.json.results }}"
+      loop_control:
+        label: "{{ item.identifier | default(item.id | string) }}"
+      when:
+        - item.job is not none
+
+    - name: Initialize nested workflow descendant state
+      ansible.builtin.set_fact:
+        previous_nested_workflow_job_ids: []
+        previous_nested_workflow_nodes: []
+
+    - name: Capture executed nested workflow jobs
+      ansible.builtin.set_fact:
+        previous_nested_workflow_job_ids: >-
+          {{
+            previous_nested_workflow_job_ids
+            + [item.job | int]
+          }}
+      loop: "{{ previous_awx_workflow_nodes.json.results }}"
+      loop_control:
+        label: "{{ item.identifier | default(item.id | string) }}"
+      when:
+        - item.job is not none
+        - item.summary_fields.job.type == 'workflow_job'
+
+    - name: Read nested previous AWX workflow nodes
+      ansible.builtin.uri:
+        url: >-
+          {{
+            awx_api_url | regex_replace('/+$', '')
+          }}/api/v2/workflow_jobs/{{ item | int }}/workflow_nodes/?page_size=200
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_api_token }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: true
+        status_code: 200
+      loop: "{{ previous_nested_workflow_job_ids }}"
+      loop_control:
+        label: "{{ item }}"
+      register: previous_nested_workflow_node_queries
+      no_log: true
+      when:
+        - previous_nested_workflow_job_ids | length > 0
+
+    - name: Validate nested workflow-node responses
+      ansible.builtin.assert:
+        that:
+          - item.json is mapping
+          - item.json.results is defined
+          - item.json.results is sequence
+          - item.json.next is none
+          - item.json.count | int == item.json.results | length
+        fail_msg: >-
+          Nested previous transport workflow response is incomplete or
+          paginated; automatic reconciliation refused.
+      loop: >-
+        {{
+          previous_nested_workflow_node_queries.results
+          | default([])
+        }}
+      loop_control:
+        label: "{{ item.item | default('unknown') }}"
+      when:
+        - previous_nested_workflow_job_ids | length > 0
+
+    - name: Collect nested workflow descendants
+      ansible.builtin.set_fact:
+        previous_nested_workflow_nodes: >-
+          {{
+            previous_nested_workflow_nodes
+            + (item.json.results | default([]))
+          }}
+      loop: >-
+        {{
+          previous_nested_workflow_node_queries.results
+          | default([])
+        }}
+      loop_control:
+        label: "{{ item.item | default('unknown') }}"
+      when:
+        - previous_nested_workflow_job_ids | length > 0
+
+    - name: Validate executed nested descendant state
+      ansible.builtin.assert:
+        that:
+          - item.summary_fields is mapping
+          - item.summary_fields.job is mapping
+          - item.summary_fields.job.type is defined
+          - item.summary_fields.job.status is defined
+          - item.summary_fields.job.status in safe_previous_descendant_terminal_states
+          - item.summary_fields.job.type != 'workflow_job'
+        fail_msg: >-
+          Previous transport owner has an active, ambiguous, or
+          deeper-nested workflow descendant; automatic reconciliation
+          refused.
+      loop: "{{ previous_nested_workflow_nodes }}"
+      loop_control:
+        label: "{{ item.identifier | default(item.id | string) }}"
+      when:
+        - item.job is not none
 
     - name: Reclaim stale transport ownership
       community.postgresql.postgresql_query:
