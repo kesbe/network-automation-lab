@@ -1,0 +1,251 @@
+---
+- name: Reconcile stale network compliance transport event
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+    awx_api_url: "{{ lookup('ansible.builtin.env', 'NETAUTO_AWX_URL') }}"
+    awx_api_token: "{{ lookup('ansible.builtin.env', 'NETAUTO_AWX_TOKEN') }}"
+    awx_validate_certs: >-
+      {{
+        lookup('ansible.builtin.env', 'NETAUTO_AWX_VALIDATE_CERTS')
+        | default('false', true)
+        | bool
+      }}
+
+    production_transport_workflow_template_id: 56
+
+    transport_reconciliation_lease_seconds_effective: >-
+      {{
+        transport_reconciliation_lease_seconds
+        | default(600)
+        | int
+      }}
+
+    transport_reconciliation_reason_effective: >-
+      {{
+        transport_reconciliation_reason
+        | default('controlled stale transport reconciliation')
+      }}
+
+    safe_previous_workflow_terminal_states:
+      - failed
+      - error
+      - canceled
+
+  tasks:
+    - name: Validate reconciliation input
+      ansible.builtin.assert:
+        that:
+          - transport_event_id is defined
+          - transport_event_id | string | length > 0
+          - transport_expected_workflow_job_id is defined
+          - transport_expected_workflow_job_id | int > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - awx_workflow_job_id is defined
+          - awx_workflow_job_id | int > 0
+          - awx_workflow_job_id | int != transport_expected_workflow_job_id | int
+          - transport_reconciliation_lease_seconds_effective | int >= 60
+          - transport_reconciliation_lease_seconds_effective | int <= 86400
+          - transport_reconciliation_reason_effective | string | length > 0
+        fail_msg: Stale transport reconciliation input is invalid.
+
+    - name: Validate PostgreSQL reconciler credential metadata
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_reconciler_runtime'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL reconciler credential metadata is invalid.
+
+    - name: Validate PostgreSQL reconciler password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL reconciler password was not injected.
+      no_log: true
+
+    - name: Validate AWX read credential metadata
+      ansible.builtin.assert:
+        that:
+          - awx_api_url | length > 0
+          - awx_api_token | length > 0
+        fail_msg: AWX reconciliation reader credential was not injected.
+      no_log: true
+
+    - name: Inspect stale transport event through controlled API
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT compliance.inspect_stale_transport_event(
+            %(event_id)s::text
+          ) AS result;
+        named_args:
+          event_id: "{{ transport_event_id }}"
+      register: stale_transport_query
+      no_log: true
+
+    - name: Validate stale inspection response shape
+      ansible.builtin.assert:
+        that:
+          - stale_transport_query.query_all_results is defined
+          - stale_transport_query.query_all_results | length == 1
+          - stale_transport_query.query_all_results[0] | length == 1
+          - stale_transport_query.query_all_results[0][0].result is defined
+        fail_msg: Stale transport inspection returned an unexpected response.
+
+    - name: Capture stale inspection result
+      ansible.builtin.set_fact:
+        stale_transport_result_raw: >-
+          {{
+            stale_transport_query.query_all_results[0][0].result
+          }}
+
+    - name: Normalize stale inspection result
+      ansible.builtin.set_fact:
+        stale_transport_result: >-
+          {{
+            stale_transport_result_raw
+            if stale_transport_result_raw is mapping
+            else
+            (stale_transport_result_raw | from_json)
+          }}
+
+    - name: Require exact stale ownership candidate
+      ansible.builtin.assert:
+        that:
+          - stale_transport_result is mapping
+          - stale_transport_result.decision == 'STALE_CANDIDATE'
+          - stale_transport_result.event_id == transport_event_id
+          - stale_transport_result.state == 'CLAIMED'
+          - stale_transport_result.claim_workflow_job_id | int == transport_expected_workflow_job_id | int
+        fail_msg: Transport event is not an eligible stale reconciliation candidate.
+
+    - name: Read previous AWX workflow job
+      ansible.builtin.uri:
+        url: >-
+          {{
+            awx_api_url | regex_replace('/+$', '')
+          }}/api/v2/workflow_jobs/{{ transport_expected_workflow_job_id | int }}/
+        method: GET
+        headers:
+          Authorization: "Bearer {{ awx_api_token }}"
+        validate_certs: "{{ awx_validate_certs }}"
+        return_content: true
+        status_code: 200
+      register: previous_awx_workflow
+      no_log: true
+
+    - name: Validate previous AWX workflow provenance
+      ansible.builtin.assert:
+        that:
+          - previous_awx_workflow.json is mapping
+          - previous_awx_workflow.json.id | int == transport_expected_workflow_job_id | int
+          - previous_awx_workflow.json.workflow_job_template | int == production_transport_workflow_template_id
+          - previous_awx_workflow.json.status in safe_previous_workflow_terminal_states
+          - previous_awx_workflow.json.finished is not none
+        fail_msg: Previous transport owner is not safe for automatic reconciliation.
+
+    - name: Reclaim stale transport ownership
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT compliance.reclaim_stale_transport_event(
+            %(event_id)s::text,
+            %(expected_workflow_job_id)s::bigint,
+            %(new_workflow_job_id)s::bigint,
+            %(lease_seconds)s::integer,
+            %(reason)s::text
+          ) AS result;
+        named_args:
+          event_id: "{{ transport_event_id }}"
+          expected_workflow_job_id: "{{ transport_expected_workflow_job_id | int }}"
+          new_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+          lease_seconds: "{{ transport_reconciliation_lease_seconds_effective | int }}"
+          reason: "{{ transport_reconciliation_reason_effective }}"
+      register: transport_reclaim_query
+      no_log: true
+
+    - name: Validate reclaim response shape
+      ansible.builtin.assert:
+        that:
+          - transport_reclaim_query.query_all_results is defined
+          - transport_reclaim_query.query_all_results | length == 1
+          - transport_reclaim_query.query_all_results[0] | length == 1
+          - transport_reclaim_query.query_all_results[0][0].result is defined
+        fail_msg: PostgreSQL stale reclaim API returned an unexpected response.
+
+    - name: Capture stale reclaim result
+      ansible.builtin.set_fact:
+        transport_reclaim_result_raw: >-
+          {{
+            transport_reclaim_query.query_all_results[0][0].result
+          }}
+
+    - name: Normalize stale reclaim result
+      ansible.builtin.set_fact:
+        transport_reclaim_result: >-
+          {{
+            transport_reclaim_result_raw
+            if transport_reclaim_result_raw is mapping
+            else
+            (transport_reclaim_result_raw | from_json)
+          }}
+
+    - name: Validate controlled ownership transfer
+      ansible.builtin.assert:
+        that:
+          - transport_reclaim_result is mapping
+          - transport_reclaim_result.decision == 'CLAIMED_RECONCILED'
+          - transport_reclaim_result.event_id == transport_event_id
+          - transport_reclaim_result.state == 'CLAIMED'
+          - transport_reclaim_result.claim_workflow_job_id | int == awx_workflow_job_id | int
+        fail_msg: Stale transport ownership transfer failed validation.
+
+    - name: Publish safe reconciliation artifact
+      ansible.builtin.set_stats:
+        data:
+          transport_reconciliation:
+            event_id: "{{ transport_reclaim_result.event_id }}"
+            decision: "{{ transport_reclaim_result.decision }}"
+            previous_workflow_job_id: "{{ transport_expected_workflow_job_id | int }}"
+            recovery_workflow_job_id: "{{ awx_workflow_job_id | int }}"
+            reconciliation_job_id: "{{ awx_job_id | int }}"
+            attempt_count: "{{ transport_reclaim_result.attempt_count | int }}"
+            duplicate_count: "{{ transport_reclaim_result.duplicate_count | int }}"
+        per_host: false
+
+    - name: Report stale reconciliation
+      ansible.builtin.debug:
+        msg:
+          event_id: "{{ transport_reclaim_result.event_id }}"
+          decision: "{{ transport_reclaim_result.decision }}"
+          previous_workflow_job_id: "{{ transport_expected_workflow_job_id | int }}"
+          recovery_workflow_job_id: "{{ awx_workflow_job_id | int }}"
