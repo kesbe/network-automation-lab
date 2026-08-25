@@ -18,10 +18,38 @@
 
   tasks:
 
-    - name: Load intended configuration
+    - name: Load base intended configuration
       ansible.builtin.set_fact:
         intent: "{{ network_intent[inventory_hostname] }}"
         compliance_violations: []
+
+    - name: Require NetBox maximum-paths intent for managed devices
+      ansible.builtin.assert:
+        that:
+          - netbox_maximum_paths is defined
+          - netbox_maximum_paths is not none
+          - (netbox_maximum_paths | int) > 0
+        fail_msg: >-
+          Refusing compliance evaluation for {{ inventory_hostname }}.
+          maximum_paths is managed for this device but the authoritative
+          NetBox netbox_maximum_paths value is missing or invalid.
+        success_msg: >-
+          Authoritative NetBox maximum_paths intent resolved for
+          {{ inventory_hostname }}.
+      when: network_intent[inventory_hostname].maximum_paths is defined
+
+    - name: Overlay authoritative NetBox maximum-paths intent
+      ansible.builtin.set_fact:
+        intent: >-
+          {{
+            intent
+            | combine(
+                {
+                  'maximum_paths': (netbox_maximum_paths | int)
+                }
+              )
+          }}
+      when: network_intent[inventory_hostname].maximum_paths is defined
 
     - name: Collect running configuration
       ansible.builtin.raw: >
