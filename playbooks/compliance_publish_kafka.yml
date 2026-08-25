@@ -157,7 +157,7 @@
                 (
                   kafka_publisher_command.stdout
                   | regex_search(
-                      '(?m)^published_event_id=[^\\n]+'
+                      '(?m)^published_event_id=[^\n]+'
                     )
                   | default('', true)
                   | regex_replace(
@@ -172,7 +172,7 @@
                 (
                   kafka_publisher_command.stdout
                   | regex_search(
-                      '(?m)^published_partition=[^\\n]+'
+                      '(?m)^published_partition=[^\n]+'
                     )
                   | default('', true)
                   | regex_replace(
@@ -187,7 +187,7 @@
                 (
                   kafka_publisher_command.stdout
                   | regex_search(
-                      '(?m)^published_offset=[^\\n]+'
+                      '(?m)^published_offset=[^\n]+'
                     )
                   | default('', true)
                   | regex_replace(

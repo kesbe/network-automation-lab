@@ -27,6 +27,6 @@ spec:
 
       webhookConfigs:
         - url: >-
-            http://eda-alertmanager-awx-activation.eda.svc.cluster.local:5001/endpoint
+            http://incident-webhook.eda.svc.cluster.local:8080/endpoint
 
           sendResolved: true

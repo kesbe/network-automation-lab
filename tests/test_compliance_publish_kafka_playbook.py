@@ -94,5 +94,76 @@ class KafkaPublisherPlaybookTests(
             )
 
 
+    def test_receipt_regex_handles_network_event_id(self):
+        import re
+
+        # Regression: the former double-escaped character class
+        # rejected event IDs beginning with the letter "n".
+        self.assertNotIn(
+            r"[^\\n]+",
+            self.text,
+        )
+
+        self.assertEqual(
+            self.text.count(r"[^\n]+"),
+            3,
+        )
+
+        stdout = "\n".join(
+            [
+                "production_publisher_decision=EVENT_PUBLISHED",
+                (
+                    "published_event_id="
+                    "network-compliance-drift-"
+                    "0ce2607184fb23c8b43302b68c30c688"
+                ),
+                "published_topic=network.compliance.events",
+                "published_partition=1",
+                "published_offset=0",
+                "kafka_record_published=YES",
+            ]
+        )
+
+        cases = (
+            (
+                r"(?m)^published_event_id=[^\n]+",
+                "published_event_id=",
+                (
+                    "network-compliance-drift-"
+                    "0ce2607184fb23c8b43302b68c30c688"
+                ),
+            ),
+            (
+                r"(?m)^published_partition=[^\n]+",
+                "published_partition=",
+                "1",
+            ),
+            (
+                r"(?m)^published_offset=[^\n]+",
+                "published_offset=",
+                "0",
+            ),
+        )
+
+        for pattern, prefix, expected in cases:
+
+            match=re.search(
+                pattern,
+                stdout,
+            )
+
+            self.assertIsNotNone(
+                match,
+                msg=pattern,
+            )
+
+            value=match.group(0)[len(prefix):]
+
+            self.assertEqual(
+                value,
+                expected,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
