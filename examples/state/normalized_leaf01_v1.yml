@@ -1,0 +1,42 @@
+---
+schema_version: "1.0"
+
+device:
+  name: leaf01
+  platform: frr
+  role: leaf
+
+system:
+  hostname: leaf01
+
+bgp:
+  local_as: 65101
+  router_id: 10.255.1.1
+
+  ipv4_unicast:
+    maximum_paths: 2
+
+  neighbors:
+    - address: 10.0.0.0
+      remote_as: 65000
+      description: SPINE01
+      operational_state: Established
+
+    - address: 10.0.0.4
+      remote_as: 65000
+      description: SPINE02
+      operational_state: Established
+
+interfaces:
+  - name: eth1
+    ipv4_addresses:
+      - 10.0.0.1/31
+
+  - name: eth2
+    ipv4_addresses:
+      - 10.0.0.5/31
+
+loopbacks:
+  - name: loopback0
+    ipv4_addresses:
+      - 10.255.1.1/32
