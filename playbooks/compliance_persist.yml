@@ -56,6 +56,93 @@
           AWX compliance correlation metadata is missing,
           invalid, or inconsistent with the active workflow
 
+    - name: Validate DB-bound device status contract
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+          - item.status is defined
+          - item.status | string in [
+              'COMPLIANT',
+              'NON_COMPLIANT',
+              'NON-COMPLIANT'
+            ]
+        fail_msg: >-
+          Unsupported compliance device status for PostgreSQL
+          persistence boundary
+      loop: "{{ compliance_run.device_results }}"
+      loop_control:
+        label: "{{ item.device | default('UNKNOWN') }}"
+
+    - name: Initialize DB-bound device results
+      ansible.builtin.set_fact:
+        db_compliance_device_results: []
+
+    - name: Normalize device status for legacy PostgreSQL storage
+      ansible.builtin.set_fact:
+        db_compliance_device_results: >-
+          {{
+            db_compliance_device_results
+            +
+            [
+              item
+              | combine(
+                  {
+                    'status':
+                      db_device_status_map[
+                        item.status | string
+                      ]
+                  },
+                  recursive=True
+                )
+            ]
+          }}
+      vars:
+        db_device_status_map:
+          COMPLIANT: COMPLIANT
+          NON_COMPLIANT: NON-COMPLIANT
+          NON-COMPLIANT: NON-COMPLIANT
+      loop: "{{ compliance_run.device_results }}"
+      loop_control:
+        label: "{{ item.device | default('UNKNOWN') }}"
+
+    - name: Build PostgreSQL-compatible compliance run copy
+      ansible.builtin.set_fact:
+        db_compliance_run: >-
+          {{
+            compliance_run
+            | combine(
+                {
+                  'device_results':
+                    db_compliance_device_results
+                },
+                recursive=True
+              )
+          }}
+
+    - name: Validate PostgreSQL compatibility copy
+      ansible.builtin.assert:
+        that:
+          - db_compliance_run is mapping
+          - db_compliance_run.run_id == compliance_run.run_id
+          - db_compliance_run.summary == compliance_run.summary
+          - db_compliance_run.findings == compliance_run.findings
+          - db_compliance_run.critical_findings == compliance_run.critical_findings
+          - db_compliance_run.device_results | length == compliance_run.device_results | length
+          - >-
+            (
+              db_compliance_run.device_results
+              | rejectattr(
+                  'status',
+                  'in',
+                  ['COMPLIANT', 'NON-COMPLIANT']
+                )
+              | list
+              | length
+            ) == 0
+        fail_msg: >-
+          PostgreSQL compliance-run compatibility mapping
+          failed closed
+
     - name: Validate PostgreSQL credential metadata
       ansible.builtin.assert:
         that:
@@ -97,7 +184,7 @@
             %(actor)s::text
           ) AS result
         named_args:
-          compliance_run: "{{ compliance_run | to_json }}"
+          compliance_run: "{{ db_compliance_run | to_json }}"
           workflow_job_id: "{{ workflow_job_id | int }}"
           compliance_job_id: "{{ compliance_job_id | int }}"
           aggregator_job_id: "{{ aggregator_job_id | int }}"

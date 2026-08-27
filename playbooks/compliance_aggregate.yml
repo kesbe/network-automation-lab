@@ -332,7 +332,7 @@
                   | selectattr(
                       'status',
                       'equalto',
-                      'NON-COMPLIANT'
+                      'NON_COMPLIANT'
                     )
                   | list
                   | length
