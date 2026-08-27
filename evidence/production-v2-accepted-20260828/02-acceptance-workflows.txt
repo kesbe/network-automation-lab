@@ -1,0 +1,36 @@
+CORRECTED_CLEAN_CANARY
+======================
+id=848
+name='WF04-V2-PROD - Production Compliance Event Pipeline'
+status='successful'
+failed=False
+launch_type='manual'
+created='2026-08-27T15:38:02.477091Z'
+started='2026-08-27T15:38:02.666953Z'
+finished='2026-08-27T15:38:22.454781Z'
+workflow_job_template=74
+
+REAL_DRIFT_CANARY
+=================
+id=856
+name='WF04-V2-PROD - Production Compliance Event Pipeline'
+status='successful'
+failed=False
+launch_type='manual'
+created='2026-08-27T15:58:32.544683Z'
+started='2026-08-27T15:58:32.707320Z'
+finished='2026-08-27T15:58:54.066188Z'
+workflow_job_template=74
+
+FIRST_NATURAL_SCHEDULED_RUN
+===========================
+id=890
+name='WF04-V2-PROD - Production Compliance Event Pipeline'
+status='successful'
+failed=False
+launch_type='scheduled'
+created='2026-08-27T17:00:25.423340Z'
+started='2026-08-27T17:00:25.622612Z'
+finished='2026-08-27T17:00:46.162222Z'
+workflow_job_template=74
+

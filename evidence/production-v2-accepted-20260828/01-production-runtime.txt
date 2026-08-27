@@ -1,0 +1,25 @@
+PRODUCTION V2 RUNTIME
+=====================
+
+PROJECT
+id=69
+name=Network Automation Lab - Production V2
+status=successful
+scm_branch=v2.0.0-rc1-real-drift-accepted
+scm_revision=940d75787f7d73f206c097f7ea3e2a3552f26583
+scm_update_on_launch=False
+
+WORKFLOW
+id=74
+name=WF04-V2-PROD - Production Compliance Event Pipeline
+allow_simultaneous=False
+
+NODES
+node=66|ujt=70|name=NW02-D-V2-PROD - Generic FRR Compliance Detector|success=[67]|failure=[]|always=[]
+node=67|ujt=71|name=NW02-A-V2-PROD - Aggregate Compliance|success=[68, 69]|failure=[]|always=[]
+node=68|ujt=72|name=NW02-P-V2-PROD - Persist Compliance Run|success=[]|failure=[]|always=[]
+node=69|ujt=73|name=NW02-KP-V2-PROD - Kafka Compliance Publisher|success=[]|failure=[]|always=[]
+
+SCHEDULES
+schedule7|enabled=False|ujt=61|rrule=DTSTART;TZID=Australia/Sydney:20260819T030000 RRULE:FREQ=DAILY;INTERVAL=1
+schedule8|enabled=True|ujt=74|rrule=DTSTART;TZID=Australia/Sydney:20260819T030000 RRULE:FREQ=DAILY;INTERVAL=1|next_run=2026-08-28T17:00:00Z
