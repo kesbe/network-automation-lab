@@ -1,0 +1,223 @@
+---
+- name: Run generic network compliance detector offline
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    generic_device_name: leaf01
+    generic_platform: frr
+    generic_role: leaf
+
+    generic_running_config_file: >-
+      {{
+        playbook_dir
+        ~ '/../tests/fixtures/frr/'
+        ~ 'leaf01_running_config.txt'
+      }}
+
+    generic_bgp_summary_file: >-
+      {{
+        playbook_dir
+        ~ '/../tests/fixtures/frr/'
+        ~ 'leaf01_bgp_summary.txt'
+      }}
+
+    generic_policy_file: >-
+      {{
+        playbook_dir
+        ~ '/../vars/compliance_policies.yml'
+      }}
+
+    generic_intent_values:
+      maximum_paths: 2
+
+    # Explicit offline fallback.
+    # A real AWX job takes precedence through awx_job_id.
+    generic_offline_mode: true
+    generic_offline_job_id: 1
+
+  tasks:
+    - name: Resolve compliance job correlation identity
+      ansible.builtin.set_fact:
+        generic_resolved_compliance_job_id: >-
+          {{
+            (awx_job_id | int)
+            if (
+              awx_job_id is defined
+              and
+              awx_job_id | int > 0
+            )
+            else
+            (
+              generic_offline_job_id | int
+              if generic_offline_mode | bool
+              else 0
+            )
+          }}
+
+    - name: Validate offline detector input contract
+      ansible.builtin.assert:
+        that:
+          - generic_device_name is string
+          - generic_device_name | trim | length > 0
+          - generic_platform is string
+          - generic_platform | trim | length > 0
+          - generic_role is string
+          - generic_role | trim | length > 0
+          - generic_intent_values is mapping
+          - generic_resolved_compliance_job_id | int > 0
+        fail_msg: >-
+          Generic offline compliance detector
+          input contract is invalid.
+
+    - name: Inspect running configuration fixture
+      ansible.builtin.stat:
+        path: "{{ generic_running_config_file }}"
+      register: generic_running_config_stat
+
+    - name: Inspect BGP summary fixture
+      ansible.builtin.stat:
+        path: "{{ generic_bgp_summary_file }}"
+      register: generic_bgp_summary_stat
+
+    - name: Inspect policy file
+      ansible.builtin.stat:
+        path: "{{ generic_policy_file }}"
+      register: generic_policy_file_stat
+
+    - name: Validate offline input files
+      ansible.builtin.assert:
+        that:
+          - generic_running_config_stat.stat.exists
+          - generic_running_config_stat.stat.isreg
+          - generic_bgp_summary_stat.stat.exists
+          - generic_bgp_summary_stat.stat.isreg
+          - generic_policy_file_stat.stat.exists
+          - generic_policy_file_stat.stat.isreg
+        fail_msg: >-
+          One or more required offline
+          compliance input files are missing.
+
+    - name: Create temporary detector workspace
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: generic-compliance-detector
+      register: generic_detector_tempdir
+
+    - name: Write desired intent input
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            generic_detector_tempdir.path
+            ~ '/intent.yml'
+          }}
+        content: >-
+          {{
+            generic_intent_values
+            | to_nice_yaml
+          }}
+        mode: "0600"
+
+    - name: Run generic compliance pipeline
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - >-
+            {{
+              playbook_dir
+              ~ '/../scripts/'
+              ~ 'generic_compliance_runner.py'
+            }}
+          - --platform
+          - "{{ generic_platform }}"
+          - --device-name
+          - "{{ generic_device_name }}"
+          - --role
+          - "{{ generic_role }}"
+          - --running-config
+          - "{{ generic_running_config_file }}"
+          - --bgp-summary
+          - "{{ generic_bgp_summary_file }}"
+          - --policy-file
+          - "{{ generic_policy_file }}"
+          - --intent-file
+          - >-
+            {{
+              generic_detector_tempdir.path
+              ~ '/intent.yml'
+            }}
+      register: generic_detector_command
+      changed_when: false
+
+    - name: Validate generic detector execution
+      ansible.builtin.assert:
+        that:
+          - generic_detector_command.rc == 0
+          - generic_detector_command.stdout | trim | length > 0
+        fail_msg: >-
+          Generic compliance detector execution failed.
+
+    - name: Parse generic detector result
+      ansible.builtin.set_fact:
+        generic_compliance_result: >-
+          {{
+            generic_detector_command.stdout
+            | from_yaml
+          }}
+
+    - name: Validate JT38-compatible device result
+      ansible.builtin.assert:
+        that:
+          - generic_compliance_result is mapping
+          - generic_compliance_result.device is defined
+          - generic_compliance_result.device == generic_device_name
+          - generic_compliance_result.status is defined
+          - generic_compliance_result.status in
+            ['COMPLIANT', 'NON_COMPLIANT']
+          - generic_compliance_result.total_checks is defined
+          - generic_compliance_result.total_checks | int >= 0
+          - generic_compliance_result.passed is defined
+          - generic_compliance_result.passed | int >= 0
+          - generic_compliance_result.failed is defined
+          - generic_compliance_result.failed | int >= 0
+          - generic_compliance_result.violations is defined
+          - generic_compliance_result.violations is sequence
+        fail_msg: >-
+          Generic detector result does not match
+          the existing JT38 per-device contract.
+
+    - name: Build AWX-compatible compliance artifacts
+      ansible.builtin.set_fact:
+        generic_compliance_artifacts: >-
+          {{
+            {
+              (
+                'compliance_'
+                ~ generic_device_name
+              ):
+                generic_compliance_result,
+              'compliance_job_id':
+                (
+                  generic_resolved_compliance_job_id
+                  | int
+                )
+            }
+          }}
+
+    - name: Display offline compliance artifacts
+      ansible.builtin.debug:
+        var: generic_compliance_artifacts
+
+    - name: Publish AWX-compatible compliance artifacts
+      ansible.builtin.set_stats:
+        data: "{{ generic_compliance_artifacts }}"
+        per_host: false
+
+    - name: Remove temporary detector workspace
+      ansible.builtin.file:
+        path: "{{ generic_detector_tempdir.path }}"
+        state: absent
+      when:
+        - generic_detector_tempdir is defined
+        - generic_detector_tempdir.path is defined
