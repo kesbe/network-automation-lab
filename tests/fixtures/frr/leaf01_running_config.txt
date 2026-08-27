@@ -1,0 +1,16 @@
+hostname leaf01
+interface eth1
+ ip address 10.0.0.1/31
+interface eth2
+ ip address 10.0.0.5/31
+interface lo
+ ip address 10.255.1.1/32
+router bgp 65101
+ bgp router-id 10.255.1.1
+ neighbor 10.0.0.0 remote-as 65000
+ neighbor 10.0.0.0 description SPINE01
+ neighbor 10.0.0.4 remote-as 65000
+ neighbor 10.0.0.4 description SPINE02
+ address-family ipv4 unicast
+  maximum-paths 2
+ exit-address-family

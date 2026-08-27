@@ -1,0 +1,4 @@
+BGP router identifier 10.255.1.1, local AS number 65101 VRF default vrf-id 0
+Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc
+10.0.0.0        4      65000        86        87        4    0    0 01:20:47            2        4 SPINE01
+10.0.0.4        4      65000        86        88        4    0    0 01:20:47            2        4 SPINE02

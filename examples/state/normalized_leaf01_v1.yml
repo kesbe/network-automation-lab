@@ -37,6 +37,6 @@ interfaces:
       - 10.0.0.5/31
 
 loopbacks:
-  - name: loopback0
+  - name: lo
     ipv4_addresses:
       - 10.255.1.1/32
