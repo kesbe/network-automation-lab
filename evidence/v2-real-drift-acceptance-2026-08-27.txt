@@ -1,0 +1,66 @@
+V2 REAL-DRIFT CLOSED-LOOP ACCEPTANCE
+====================================
+
+RESULT=PASS
+
+SOURCE_REVISION=940d75787f7d73f206c097f7ea3e2a3552f26583
+PROJECT62_UPDATE_ID=807
+
+DETECTOR_JOB_ID=802
+
+WF68_JOB_ID=809
+AGGREGATOR_JOB_ID=810
+PERSISTENCE_JOB_ID=811
+PUBLISHER_JOB_ID=812
+
+NATURAL_WF56_ID=813
+NATURAL_WF40_ID=816
+
+TARGETED_REMEDIATION_JOB_ID=827
+POST_REMEDIATION_RECHECK_JOB_ID=829
+FINAL_DEVICE_READ_ID=841
+
+COMPLIANCE_RUN_ID=compliance-v2-5kcd-job802-workflow
+EVENT_ID=network-compliance-drift-e3a37c797ac8191a7abe4fef7f2427b1
+
+AGGREGATOR_RESULT:
+  devices_checked=1
+  devices_compliant=0
+  devices_noncompliant=1
+  total_findings=1
+  device_status=NON_COMPLIANT
+
+PERSISTENCE_RESULT:
+  compliance_run_devices.status=NON-COMPLIANT
+  finding_occurrences=1
+
+TRANSPORT_RESULT:
+  state=COMPLETED
+  attempt_count=1
+  duplicate_count=0
+  claim_workflow_job_id=813
+
+PUBLISH_RESULT:
+  publisher_decision=EVENT_PUBLISHED
+  publisher_transport_mode=KAFKA
+  publisher_publish_attempted=true
+  publisher_kafka_contact_attempted=true
+  kafka_partition=0
+  kafka_offset=5
+
+FINAL_DEVICE_RESULT:
+  device=leaf01
+  router_bgp=65101
+  maximum_paths_1=NO
+  maximum_paths_2=YES
+
+ACCEPTANCE:
+  V2_DETECTOR_CONTRACT=PASS
+  V2_AGGREGATOR=PASS
+  V2_PERSISTENCE=PASS
+  V2_KAFKA_PUBLISHER=PASS
+  EDA_TRANSPORT=PASS
+  DURABLE_WRAPPER_WF56=PASS
+  REMEDIATION_WF40=PASS
+  INDEPENDENT_DEVICE_RESTORE=PASS
+  END_TO_END_CLOSED_LOOP=PASS
