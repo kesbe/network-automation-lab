@@ -1,0 +1,265 @@
+---
+- name: Run generic FRR compliance detector online validation
+  hosts: "{{ target_device | default('__missing_target__', true) }}"
+  gather_facts: false
+
+  vars_files:
+    - ../vars/compliance_intent.yml
+    - ../vars/compliance_policies.yml
+
+  vars:
+    # Phase V2.0-5H is deliberately restricted to the
+    # already-proven FRR leaf01 read-only validation path.
+    generic_validation_target: leaf01
+    generic_platform: frr
+    generic_role: leaf
+
+    generic_policy_file: >-
+      {{
+        playbook_dir
+        ~ '/../vars/compliance_policies.yml'
+      }}
+
+  pre_tasks:
+    - name: Validate named-host online detector contract
+      ansible.builtin.assert:
+        that:
+          - target_device is defined
+          - target_device is string
+          - target_device | trim | length > 0
+          - target_device == generic_validation_target
+          - inventory_hostname == target_device
+          - network_intent is mapping
+          - network_intent.get(inventory_hostname) is mapping
+          - netbox_maximum_paths is defined
+          - netbox_maximum_paths is not none
+          - (netbox_maximum_paths | int) > 0
+          - awx_job_id is defined
+          - (awx_job_id | int) > 0
+          - generic_platform == 'frr'
+          - generic_role == 'leaf'
+        fail_msg: >-
+          Refusing online generic compliance collection because
+          the named-host, inventory intent, NetBox intent, or AWX
+          correlation contract is invalid.
+
+    - name: Resolve authoritative online intent
+      ansible.builtin.set_fact:
+        generic_intent_values: >-
+          {{
+            network_intent[inventory_hostname]
+            | combine(
+                {
+                  'maximum_paths':
+                    (netbox_maximum_paths | int)
+                }
+              )
+          }}
+        generic_resolved_compliance_job_id: >-
+          {{ awx_job_id | int }}
+
+    - name: Validate resolved online intent
+      ansible.builtin.assert:
+        that:
+          - generic_intent_values is mapping
+          - generic_intent_values.hostname is defined
+          - generic_intent_values.hostname == inventory_hostname
+          - generic_intent_values.maximum_paths is defined
+          - (generic_intent_values.maximum_paths | int) > 0
+          - generic_resolved_compliance_job_id | int > 0
+        fail_msg: >-
+          Resolved online compliance intent is invalid.
+
+  tasks:
+    - name: Collect FRR running configuration read-only
+      ansible.builtin.raw: >
+        vtysh -c 'show running-config'
+      register: generic_running_config
+      changed_when: false
+
+    - name: Collect FRR BGP operational state read-only
+      ansible.builtin.raw: >
+        vtysh -c 'show bgp ipv4 unicast summary'
+      register: generic_bgp_summary
+      changed_when: false
+
+    - name: Validate FRR read-only collection
+      ansible.builtin.assert:
+        that:
+          - generic_running_config.rc == 0
+          - generic_running_config.stdout is string
+          - generic_running_config.stdout | trim | length > 0
+          - generic_bgp_summary.rc == 0
+          - generic_bgp_summary.stdout is string
+          - generic_bgp_summary.stdout | trim | length > 0
+        fail_msg: >-
+          FRR read-only state collection failed.
+
+    - name: Run controller-local generic compliance evaluation
+      block:
+        - name: Create controller-local detector workspace
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: generic-compliance-online
+          delegate_to: localhost
+          register: generic_detector_tempdir
+          changed_when: false
+
+        - name: Write collected running configuration locally
+          ansible.builtin.copy:
+            dest: >-
+              {{
+                generic_detector_tempdir.path
+                ~ '/running-config.txt'
+              }}
+            content: "{{ generic_running_config.stdout }}"
+            mode: "0600"
+          delegate_to: localhost
+          changed_when: false
+          no_log: true
+
+        - name: Write collected BGP summary locally
+          ansible.builtin.copy:
+            dest: >-
+              {{
+                generic_detector_tempdir.path
+                ~ '/bgp-summary.txt'
+              }}
+            content: "{{ generic_bgp_summary.stdout }}"
+            mode: "0600"
+          delegate_to: localhost
+          changed_when: false
+          no_log: true
+
+        - name: Write authoritative desired intent locally
+          ansible.builtin.copy:
+            dest: >-
+              {{
+                generic_detector_tempdir.path
+                ~ '/intent.yml'
+              }}
+            content: >-
+              {{
+                generic_intent_values
+                | to_nice_yaml
+              }}
+            mode: "0600"
+          delegate_to: localhost
+          changed_when: false
+          no_log: true
+
+        - name: Run generic compliance pipeline locally
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - >-
+                {{
+                  playbook_dir
+                  ~ '/../scripts/'
+                  ~ 'generic_compliance_runner.py'
+                }}
+              - --platform
+              - "{{ generic_platform }}"
+              - --device-name
+              - "{{ inventory_hostname }}"
+              - --role
+              - "{{ generic_role }}"
+              - --running-config
+              - >-
+                {{
+                  generic_detector_tempdir.path
+                  ~ '/running-config.txt'
+                }}
+              - --bgp-summary
+              - >-
+                {{
+                  generic_detector_tempdir.path
+                  ~ '/bgp-summary.txt'
+                }}
+              - --policy-file
+              - "{{ generic_policy_file }}"
+              - --intent-file
+              - >-
+                {{
+                  generic_detector_tempdir.path
+                  ~ '/intent.yml'
+                }}
+          delegate_to: localhost
+          register: generic_detector_command
+          changed_when: false
+
+        - name: Validate generic detector execution
+          ansible.builtin.assert:
+            that:
+              - generic_detector_command.rc == 0
+              - generic_detector_command.stdout is string
+              - generic_detector_command.stdout | trim | length > 0
+            fail_msg: >-
+              Generic online compliance detector execution failed.
+
+        - name: Parse generic detector result
+          ansible.builtin.set_fact:
+            generic_compliance_result: >-
+              {{
+                generic_detector_command.stdout
+                | from_yaml
+              }}
+
+        - name: Validate JT38-compatible online result
+          ansible.builtin.assert:
+            that:
+              - generic_compliance_result is mapping
+              - generic_compliance_result.device is defined
+              - generic_compliance_result.device == inventory_hostname
+              - generic_compliance_result.status is defined
+              - generic_compliance_result.status in
+                ['COMPLIANT', 'NON_COMPLIANT']
+              - generic_compliance_result.total_checks is defined
+              - generic_compliance_result.total_checks | int >= 0
+              - generic_compliance_result.passed is defined
+              - generic_compliance_result.passed | int >= 0
+              - generic_compliance_result.failed is defined
+              - generic_compliance_result.failed | int >= 0
+              - generic_compliance_result.violations is defined
+              - generic_compliance_result.violations is sequence
+            fail_msg: >-
+              Generic online detector result does not match
+              the existing JT38 per-device contract.
+
+        - name: Build AWX-compatible online artifacts
+          ansible.builtin.set_fact:
+            generic_compliance_artifacts: >-
+              {{
+                {
+                  (
+                    'compliance_'
+                    ~ inventory_hostname
+                  ):
+                    generic_compliance_result,
+                  'compliance_job_id':
+                    (
+                      generic_resolved_compliance_job_id
+                      | int
+                    )
+                }
+              }}
+
+        - name: Display online compliance artifacts
+          ansible.builtin.debug:
+            var: generic_compliance_artifacts
+
+        - name: Publish AWX-compatible online artifacts
+          ansible.builtin.set_stats:
+            data: "{{ generic_compliance_artifacts }}"
+            per_host: false
+
+      always:
+        - name: Remove controller-local detector workspace
+          ansible.builtin.file:
+            path: "{{ generic_detector_tempdir.path }}"
+            state: absent
+          delegate_to: localhost
+          changed_when: false
+          when:
+            - generic_detector_tempdir is defined
+            - generic_detector_tempdir.path is defined
