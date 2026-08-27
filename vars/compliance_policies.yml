@@ -55,12 +55,32 @@ compliance_policies:
     category: routing
     severity: high
 
+    scope:
+      roles:
+        - leaf
+      platforms:
+        - frr
+
+    intent:
+      source: netbox
+      field: maximum_paths
+
+    state:
+      path: bgp.ipv4_unicast.maximum_paths
+
+    comparison:
+      operator: equals
+
     ticket_required: false
 
     remediation:
       supported: true
       mode: auto
       risk: low
+      action: set_bgp_maximum_paths
+
+    verification:
+      required: true
 
     owner: network_operations
 
