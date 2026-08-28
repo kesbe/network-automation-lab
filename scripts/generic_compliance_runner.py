@@ -27,6 +27,14 @@ from scripts.vendor_frr_adapter import (
     FrrAdapterError,
     normalize_frr_state,
 )
+from scripts.vendor_cisco_ios_adapter import (
+    CiscoIosAdapterError,
+    normalize_cisco_ios_state,
+)
+from scripts.vendor_arista_eos_adapter import (
+    AristaEosAdapterError,
+    normalize_arista_eos_state,
+)
 
 
 class GenericComplianceRunnerError(Exception):
@@ -94,6 +102,93 @@ def normalize_platform_state(
         except FrrAdapterError as exc:
             raise GenericComplianceRunnerError(
                 f"FRR normalization failed: {exc}"
+            ) from exc
+
+    if platform_key in {
+        "cisco_ios",
+        "ios",
+        "iosxe",
+    }:
+        running_config = raw_inputs.get(
+            "running_config"
+        )
+        bgp_summary = raw_inputs.get(
+            "bgp_summary"
+        )
+
+        if not isinstance(
+            running_config,
+            str,
+        ):
+            raise GenericComplianceRunnerError(
+                "Cisco IOS running_config "
+                "is required"
+            )
+
+        if not isinstance(
+            bgp_summary,
+            str,
+        ):
+            raise GenericComplianceRunnerError(
+                "Cisco IOS bgp_summary "
+                "is required"
+            )
+
+        try:
+            return normalize_cisco_ios_state(
+                running_config,
+                bgp_summary,
+                device_name=device_name,
+                role=role,
+                site=site,
+            )
+        except CiscoIosAdapterError as exc:
+            raise GenericComplianceRunnerError(
+                "Cisco IOS normalization "
+                f"failed: {exc}"
+            ) from exc
+
+    if platform_key in {
+        "arista_eos",
+        "eos",
+    }:
+        running_config = raw_inputs.get(
+            "running_config"
+        )
+        bgp_summary = raw_inputs.get(
+            "bgp_summary"
+        )
+
+        if not isinstance(
+            running_config,
+            str,
+        ):
+            raise GenericComplianceRunnerError(
+                "Arista EOS running_config "
+                "is required"
+            )
+
+        if not isinstance(
+            bgp_summary,
+            str,
+        ):
+            raise GenericComplianceRunnerError(
+                "Arista EOS bgp_summary "
+                "is required"
+            )
+
+        try:
+            return normalize_arista_eos_state(
+                running_config,
+                bgp_summary,
+                device_name=device_name,
+                role=role,
+                site=site,
+            )
+        except AristaEosAdapterError as exc:
+            raise GenericComplianceRunnerError(
+                "Arista EOS normalization "
+                f"failed: {exc}"
             ) from exc
 
     raise GenericComplianceRunnerError(

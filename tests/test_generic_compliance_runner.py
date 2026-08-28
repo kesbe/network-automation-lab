@@ -189,7 +189,7 @@ class GenericComplianceRunnerTests(
             GenericComplianceRunnerError
         ):
             normalize_platform_state(
-                "cisco_ios",
+                "juniper_junos",
                 self.raw_inputs(),
                 device_name="leaf01",
                 role="leaf",

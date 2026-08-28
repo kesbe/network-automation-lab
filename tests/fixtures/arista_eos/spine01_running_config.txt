@@ -1,0 +1,7 @@
+hostname spine01
+!
+router bgp 65000
+ router-id 10.255.0.1
+ maximum-paths 2
+ neighbor 192.0.2.2 remote-as 65101
+!

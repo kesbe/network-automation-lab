@@ -1,0 +1,2 @@
+BGP router identifier 10.255.2.1, local AS number 65200
+BGP table version is 7, main routing table version 7
