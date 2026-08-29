@@ -32,6 +32,9 @@ safe_database_name() {
 }
 
 
+TEST_EXPORTER_RUNTIME_ROLE_CREATED=0
+
+
 cleanup() {
     if [[ "${TEST_DB_CREATED}" -eq 1 ]]; then
 
@@ -118,6 +121,40 @@ cleanup() {
             echo "role_cleanup_gate=HOLD"
         fi
     fi
+
+    if [[ "${TEST_EXPORTER_RUNTIME_ROLE_CREATED}" -eq 1 ]]; then
+
+        echo
+        echo "===== CLEANUP TEST EXPORTER RUNTIME ROLE ====="
+        echo "cleanup_role=compliance_exporter_runtime"
+
+        docker exec \
+            "${CONTAINER}" \
+            psql \
+                -v ON_ERROR_STOP=1 \
+                -U "${PGUSER}" \
+                -d postgres \
+                -c \
+                "DROP ROLE IF EXISTS compliance_exporter_runtime;" \
+            >/dev/null
+
+        EXPORTER_RUNTIME_CLEANUP_RC=$?
+
+        echo \
+            "exporter_runtime_cleanup_rc="\
+"${EXPORTER_RUNTIME_CLEANUP_RC}"
+
+        if [[ \
+            "${EXPORTER_RUNTIME_CLEANUP_RC}" -eq 0 \
+        ]]; then
+            echo \
+                "exporter_runtime_cleanup_gate=PASS"
+        else
+            echo \
+                "exporter_runtime_cleanup_gate=HOLD"
+        fi
+    fi
+
 }
 
 trap cleanup EXIT
@@ -450,7 +487,7 @@ echo "create_database_gate=PASS"
 # ------------------------------------------------------------------
 
 echo
-echo "===== APPLY V3 MIGRATIONS 001 -> 008 ====="
+echo "===== APPLY V3 MIGRATIONS 001 -> 009 ====="
 
 MIGRATION_FILES=(
     "001_compliance_schema.sql"
@@ -461,6 +498,7 @@ MIGRATION_FILES=(
     "006_transport_event_idempotency.sql"
     "007_stale_reconciliation_security.sql"
     "008_remediation_ticket_lifecycle.sql"
+    "009_compliance_exporter_read_model.sql"
 )
 
 APPLIED=0
@@ -549,11 +587,139 @@ done
 echo
 echo "migrations_applied=${APPLIED}"
 
-if [[ "${APPLIED}" -ne 8 ]]; then
-    fail "expected 8 migrations"
+if [[ "${APPLIED}" -ne 9 ]]; then
+    fail "expected 9 migrations"
 fi
 
 echo "migration_count_gate=PASS"
+
+
+# ------------------------------------------------------------------
+# Create disposable exporter runtime identity
+#
+# Production runtime credentials are NOT created by migration 009.
+# This LOGIN role exists only to prove inherited read-only capability.
+# ------------------------------------------------------------------
+
+echo
+echo "===== CREATE TEST EXPORTER RUNTIME IDENTITY ====="
+
+EXPORTER_RUNTIME_PREEXISTING="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d postgres \
+            -Atc "
+SELECT count(*)
+FROM pg_roles
+WHERE rolname = 'compliance_exporter_runtime';
+"
+)"
+
+echo \
+    "exporter_runtime_preexisting_count="\
+"${EXPORTER_RUNTIME_PREEXISTING}"
+
+if [[ "${EXPORTER_RUNTIME_PREEXISTING}" != "0" ]]; then
+    fail \
+        "compliance_exporter_runtime unexpectedly already exists"
+fi
+
+
+docker exec \
+    "${CONTAINER}" \
+    psql \
+        -v ON_ERROR_STOP=1 \
+        -U "${PGUSER}" \
+        -d postgres \
+        -c "
+CREATE ROLE compliance_exporter_runtime
+    LOGIN
+    NOSUPERUSER
+    NOCREATEDB
+    NOCREATEROLE
+    NOREPLICATION
+    NOBYPASSRLS;
+
+GRANT compliance_exporter
+    TO compliance_exporter_runtime;
+" \
+    >/dev/null
+
+EXPORTER_RUNTIME_CREATE_RC=$?
+
+echo \
+    "exporter_runtime_create_rc="\
+"${EXPORTER_RUNTIME_CREATE_RC}"
+
+if [[ "${EXPORTER_RUNTIME_CREATE_RC}" -ne 0 ]]; then
+    fail \
+        "unable to create disposable exporter runtime identity"
+fi
+
+TEST_EXPORTER_RUNTIME_ROLE_CREATED=1
+
+
+EXPORTER_RUNTIME_ATTRIBUTES="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d postgres \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    rolcanlogin,
+    rolsuper,
+    rolcreatedb,
+    rolcreaterole,
+    rolreplication,
+    rolbypassrls
+FROM pg_roles
+WHERE rolname = 'compliance_exporter_runtime';
+"
+)"
+
+echo \
+    "exporter_runtime_attributes="\
+"${EXPORTER_RUNTIME_ATTRIBUTES}"
+
+if [[ \
+    "${EXPORTER_RUNTIME_ATTRIBUTES}" \
+    != "t|f|f|f|f|f" \
+]]; then
+    fail \
+        "unsafe exporter runtime role attributes"
+fi
+
+
+EXPORTER_RUNTIME_MEMBER="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d postgres \
+            -Atc "
+SELECT pg_has_role(
+    'compliance_exporter_runtime',
+    'compliance_exporter',
+    'member'
+);
+"
+)"
+
+echo \
+    "exporter_runtime_is_exporter_member="\
+"${EXPORTER_RUNTIME_MEMBER}"
+
+if [[ "${EXPORTER_RUNTIME_MEMBER}" != "t" ]]; then
+    fail \
+        "exporter runtime capability membership missing"
+fi
+
+echo "exporter_runtime_identity_gate=PASS"
 
 
 # ------------------------------------------------------------------
@@ -613,6 +779,69 @@ WHERE schemaname = 'compliance';
 )"
 
 echo "compliance_table_count=${TABLE_COUNT}"
+
+
+# ------------------------------------------------------------------
+# Verify exporter read-model views
+# ------------------------------------------------------------------
+
+echo
+echo "===== VERIFY EXPORTER READ MODEL VIEWS ====="
+
+REQUIRED_EXPORTER_VIEWS=(
+    exporter_findings_summary
+    exporter_remediation_summary
+    exporter_active_ticket_summary
+    exporter_overview
+)
+
+for VIEW in "${REQUIRED_EXPORTER_VIEWS[@]}"; do
+
+    COUNT="$(
+        docker exec \
+            "${CONTAINER}" \
+            psql \
+                -U "${PGUSER}" \
+                -d "${DB}" \
+                -Atc "
+SELECT count(*)
+FROM pg_views
+WHERE schemaname = 'compliance'
+  AND viewname = '${VIEW}';
+"
+    )"
+
+    echo "view=${VIEW}|count=${COUNT}"
+
+    if [[ "${COUNT}" != "1" ]]; then
+        fail "required exporter view missing: ${VIEW}"
+    fi
+done
+
+echo "required_exporter_views_gate=PASS"
+
+
+EXPORTER_VIEW_COUNT="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -Atc "
+SELECT count(*)
+FROM pg_views
+WHERE schemaname = 'compliance'
+  AND viewname LIKE 'exporter_%';
+"
+)"
+
+echo "exporter_view_count=${EXPORTER_VIEW_COUNT}"
+
+if [[ "${EXPORTER_VIEW_COUNT}" != "4" ]]; then
+    fail "unexpected exporter read-model view count"
+fi
+
+echo "exporter_view_count_gate=PASS"
 
 
 # ------------------------------------------------------------------
@@ -724,7 +953,9 @@ echo "===== VERIFY CAPABILITY ROLES ====="
 for ROLE in \
     compliance_api_owner \
     compliance_remediation \
-    compliance_ticketing
+    compliance_ticketing \
+    compliance_exporter_owner \
+    compliance_exporter
 do
     ROLE_RESULT="$(
         docker exec \
@@ -750,6 +981,393 @@ WHERE rolname = '${ROLE}';
 done
 
 echo "capability_role_gate=PASS"
+
+
+# ------------------------------------------------------------------
+# Verify exporter read-model security
+# ------------------------------------------------------------------
+
+echo
+echo "===== VERIFY EXPORTER READ MODEL SECURITY ====="
+
+
+# The capability role and inherited runtime role must both be able
+# to SELECT all four approved aggregate views.
+
+EXPORTER_VIEW_PRIVILEGES="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    has_table_privilege(
+        'compliance_exporter',
+        'compliance.exporter_findings_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter',
+        'compliance.exporter_remediation_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter',
+        'compliance.exporter_active_ticket_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter',
+        'compliance.exporter_overview',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.exporter_findings_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.exporter_remediation_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.exporter_active_ticket_summary',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.exporter_overview',
+        'SELECT'
+    );
+"
+)"
+
+echo \
+    "exporter_view_privileges="\
+"${EXPORTER_VIEW_PRIVILEGES}"
+
+if [[ \
+    "${EXPORTER_VIEW_PRIVILEGES}" \
+    != "t|t|t|t|t|t|t|t" \
+]]; then
+    fail \
+        "exporter approved-view SELECT privileges are incomplete"
+fi
+
+echo "exporter_view_select_gate=PASS"
+
+
+# Prove an actual query works while running under the disposable
+# runtime identity.
+
+EXPORTER_RUNTIME_VIEW_QUERY="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -q \
+            -v ON_ERROR_STOP=1 \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SET ROLE compliance_exporter_runtime;
+
+SELECT
+    (SELECT count(*)
+     FROM compliance.exporter_findings_summary),
+    (SELECT count(*)
+     FROM compliance.exporter_remediation_summary),
+    (SELECT count(*)
+     FROM compliance.exporter_active_ticket_summary),
+    (SELECT count(*)
+     FROM compliance.exporter_overview);
+"
+)"
+
+EXPORTER_RUNTIME_VIEW_RC=$?
+
+echo \
+    "exporter_runtime_view_query_rc="\
+"${EXPORTER_RUNTIME_VIEW_RC}"
+
+echo \
+    "exporter_runtime_view_query="\
+"${EXPORTER_RUNTIME_VIEW_QUERY}"
+
+if [[ "${EXPORTER_RUNTIME_VIEW_RC}" -ne 0 ]]; then
+    fail \
+        "exporter runtime cannot query approved views"
+fi
+
+# Empty summaries are expected before fixture data exists.
+# exporter_overview itself always returns one aggregate row.
+
+if [[ \
+    "${EXPORTER_RUNTIME_VIEW_QUERY}" \
+    != "0|0|0|1" \
+]]; then
+    fail \
+        "unexpected empty exporter read-model state"
+fi
+
+echo "exporter_runtime_view_query_gate=PASS"
+
+
+# Direct base-table SELECT must remain unavailable.
+
+EXPORTER_BASE_SELECT="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.compliance_findings',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.remediation_attempts',
+        'SELECT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.ticket_records',
+        'SELECT'
+    );
+"
+)"
+
+echo \
+    "exporter_base_select_privileges="\
+"${EXPORTER_BASE_SELECT}"
+
+if [[ "${EXPORTER_BASE_SELECT}" != "f|f|f" ]]; then
+    fail \
+        "exporter runtime has forbidden base-table SELECT"
+fi
+
+echo "exporter_base_select_privilege_gate=PASS"
+
+
+# Prove the denial with an actual query, not only catalog metadata.
+
+BASE_SELECT_OUTPUT="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -q \
+            -v ON_ERROR_STOP=1 \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -c "
+SET ROLE compliance_exporter_runtime;
+
+SELECT count(*)
+FROM compliance.compliance_findings;
+" \
+        2>&1
+)"
+
+BASE_SELECT_RC=$?
+
+echo "exporter_direct_base_select_rc=${BASE_SELECT_RC}"
+
+if [[ "${BASE_SELECT_RC}" -eq 0 ]]; then
+    echo "${BASE_SELECT_OUTPUT}"
+    fail \
+        "exporter runtime unexpectedly read base table"
+fi
+
+if ! printf '%s\n' "${BASE_SELECT_OUTPUT}" |
+     grep -Fq \
+       "permission denied for table compliance_findings"
+then
+    echo "${BASE_SELECT_OUTPUT}"
+    fail \
+        "base-table SELECT failed for unexpected reason"
+fi
+
+echo "exporter_direct_base_select_denial_gate=PASS"
+
+
+# Direct base-table mutation must be unavailable as well.
+
+EXPORTER_BASE_DML="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.compliance_findings',
+        'INSERT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.compliance_findings',
+        'UPDATE'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.compliance_findings',
+        'DELETE'
+    ),
+
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.remediation_attempts',
+        'INSERT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.remediation_attempts',
+        'UPDATE'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.remediation_attempts',
+        'DELETE'
+    ),
+
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.ticket_records',
+        'INSERT'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.ticket_records',
+        'UPDATE'
+    ),
+    has_table_privilege(
+        'compliance_exporter_runtime',
+        'compliance.ticket_records',
+        'DELETE'
+    );
+"
+)"
+
+echo \
+    "exporter_base_dml_privileges="\
+"${EXPORTER_BASE_DML}"
+
+if [[ \
+    "${EXPORTER_BASE_DML}" \
+    != "f|f|f|f|f|f|f|f|f" \
+]]; then
+    fail \
+        "exporter runtime has forbidden base-table DML"
+fi
+
+echo "exporter_base_dml_gate=PASS"
+
+
+# Exporter must not inherit remediation or ticket lifecycle functions.
+
+EXPORTER_FUNCTIONS="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    has_function_privilege(
+        'compliance_exporter_runtime',
+        'compliance.create_remediation_attempt(text,text,text,text,text,text,text,text,text,integer,bigint,jsonb)',
+        'EXECUTE'
+    ),
+    has_function_privilege(
+        'compliance_exporter_runtime',
+        'compliance.record_remediation_approval(text,text,text,jsonb)',
+        'EXECUTE'
+    ),
+    has_function_privilege(
+        'compliance_exporter_runtime',
+        'compliance.transition_remediation_attempt(text,text,text,bigint,bigint,bigint,text,text,text,jsonb)',
+        'EXECUTE'
+    ),
+    has_function_privilege(
+        'compliance_exporter_runtime',
+        'compliance.upsert_ticket_record(text,text,text,text,text,text,text,text,boolean,jsonb)',
+        'EXECUTE'
+    ),
+    has_function_privilege(
+        'compliance_exporter_runtime',
+        'compliance.update_ticket_record(text,text,text,text,boolean,text,text,text,jsonb)',
+        'EXECUTE'
+    );
+"
+)"
+
+echo \
+    "exporter_lifecycle_function_privileges="\
+"${EXPORTER_FUNCTIONS}"
+
+if [[ "${EXPORTER_FUNCTIONS}" != "f|f|f|f|f" ]]; then
+    fail \
+        "exporter runtime can execute lifecycle mutation APIs"
+fi
+
+echo "exporter_function_separation_gate=PASS"
+
+
+# Runtime has schema usage but no schema-create capability.
+
+EXPORTER_SCHEMA_PRIVILEGES="$(
+    docker exec \
+        "${CONTAINER}" \
+        psql \
+            -U "${PGUSER}" \
+            -d "${DB}" \
+            -At \
+            -F '|' \
+            -c "
+SELECT
+    has_schema_privilege(
+        'compliance_exporter_runtime',
+        'compliance',
+        'USAGE'
+    ),
+    has_schema_privilege(
+        'compliance_exporter_runtime',
+        'compliance',
+        'CREATE'
+    );
+"
+)"
+
+echo \
+    "exporter_schema_privileges="\
+"${EXPORTER_SCHEMA_PRIVILEGES}"
+
+if [[ "${EXPORTER_SCHEMA_PRIVILEGES}" != "t|f" ]]; then
+    fail \
+        "unsafe exporter schema privileges"
+fi
+
+echo "exporter_schema_privilege_gate=PASS"
+
+echo "phase7e_exporter_security_gate=PASS"
 
 
 # ------------------------------------------------------------------

@@ -1,0 +1,137 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: network-compliance-exporter
+  namespace: compliance-db
+  labels:
+    app.kubernetes.io/name: network-compliance-exporter
+    app.kubernetes.io/part-of: network-compliance
+    app.kubernetes.io/component: metrics-exporter
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: network-compliance-exporter
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: network-compliance-exporter
+        app.kubernetes.io/part-of: network-compliance
+        app.kubernetes.io/component: metrics-exporter
+
+    spec:
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: compliance-exporter
+
+          # Deliberately non-routable placeholder.
+          # Replace only after the accepted image is pushed to an
+          # EKS-reachable registry and its immutable digest is known.
+          image: registry.invalid/network-compliance-exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: metrics
+              containerPort: 9808
+              protocol: TCP
+
+          env:
+            - name: NETAUTO_PG_HOST
+              value: postgresql.compliance-db.svc
+
+            - name: NETAUTO_PG_PORT
+              value: "5432"
+
+            - name: NETAUTO_PG_DATABASE
+              value: network_compliance
+
+            - name: NETAUTO_PG_USERNAME
+              value: compliance_exporter_runtime
+
+            - name: NETAUTO_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: compliance-exporter-db
+                  key: password
+
+            - name: NETAUTO_PG_CONNECT_TIMEOUT
+              value: "5"
+
+            - name: NETAUTO_PG_SSLMODE
+              value: prefer
+
+            - name: NETAUTO_EXPORTER_BIND_ADDRESS
+              value: 0.0.0.0
+
+            - name: NETAUTO_EXPORTER_PORT
+              value: "9808"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+---
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: network-compliance-exporter
+  namespace: compliance-db
+  labels:
+    app.kubernetes.io/name: network-compliance-exporter
+    app.kubernetes.io/part-of: network-compliance
+    app.kubernetes.io/component: metrics-exporter
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app.kubernetes.io/name: network-compliance-exporter
+
+  ports:
+    - name: metrics
+      port: 9808
+      targetPort: metrics
+      protocol: TCP

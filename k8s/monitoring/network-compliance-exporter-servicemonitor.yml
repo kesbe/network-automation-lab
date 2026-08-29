@@ -1,0 +1,26 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+
+metadata:
+  name: network-compliance-exporter
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: network-compliance-exporter
+    app.kubernetes.io/part-of: network-compliance
+
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: network-compliance-exporter
+
+  namespaceSelector:
+    matchNames:
+      - compliance-db
+
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
