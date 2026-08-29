@@ -53,16 +53,21 @@ class ComplianceExporterKubernetesTests(
             self.workload,
         )
 
-    def test_image_is_fail_closed_placeholder(self):
+    def test_image_is_pinned_to_accepted_immutable_digest(self):
         expected = (
-            "registry.invalid/"
+            "753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/"
             "network-compliance-exporter"
             "@sha256:"
-            + ("0" * 64)
+            "b13c5c6e171aa07d4c7150b254c308b0dfd4e510bd4ff8af7ffca747bd9701d0"
         )
 
-        self.assertIn(
-            expected,
+        self.assertEqual(
+            self.workload.count(expected),
+            1,
+        )
+
+        self.assertNotIn(
+            "registry.invalid/network-compliance-exporter",
             self.workload,
         )
 

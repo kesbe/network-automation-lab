@@ -37,10 +37,9 @@ spec:
       containers:
         - name: compliance-exporter
 
-          # Deliberately non-routable placeholder.
-          # Replace only after the accepted image is pushed to an
-          # EKS-reachable registry and its immutable digest is known.
-          image: registry.invalid/network-compliance-exporter@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          # Production activation image.
+          # Immutable ECR digest accepted by the Phase 7E release gates.
+          image: 753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/network-compliance-exporter@sha256:b13c5c6e171aa07d4c7150b254c308b0dfd4e510bd4ff8af7ffca747bd9701d0
           imagePullPolicy: IfNotPresent
 
           ports:
