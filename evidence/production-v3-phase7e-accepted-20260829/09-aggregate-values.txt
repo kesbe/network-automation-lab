@@ -1,0 +1,15 @@
+===== network_compliance_devices_noncompliant =====
+series_count=1
+labels={'__name__': 'network_compliance_devices_noncompliant', 'container': 'compliance-exporter', 'endpoint': 'metrics', 'instance': '192.168.3.226:9808', 'job': 'network-compliance-exporter', 'namespace': 'compliance-db', 'pod': 'network-compliance-exporter-5d7f7c7656-gkfvs', 'service': 'network-compliance-exporter'}|value=0
+
+===== network_compliance_remediation_waiting_approval =====
+series_count=1
+labels={'__name__': 'network_compliance_remediation_waiting_approval', 'container': 'compliance-exporter', 'endpoint': 'metrics', 'instance': '192.168.3.226:9808', 'job': 'network-compliance-exporter', 'namespace': 'compliance-db', 'pod': 'network-compliance-exporter-5d7f7c7656-gkfvs', 'service': 'network-compliance-exporter'}|value=0
+
+===== network_compliance_active_tickets_total =====
+series_count=1
+labels={'__name__': 'network_compliance_active_tickets_total', 'container': 'compliance-exporter', 'endpoint': 'metrics', 'instance': '192.168.3.226:9808', 'job': 'network-compliance-exporter', 'namespace': 'compliance-db', 'pod': 'network-compliance-exporter-5d7f7c7656-gkfvs', 'service': 'network-compliance-exporter'}|value=0
+
+===== network_compliance_findings_oldest_open_seconds =====
+series_count=1
+labels={'__name__': 'network_compliance_findings_oldest_open_seconds', 'container': 'compliance-exporter', 'endpoint': 'metrics', 'instance': '192.168.3.226:9808', 'job': 'network-compliance-exporter', 'namespace': 'compliance-db', 'pod': 'network-compliance-exporter-5d7f7c7656-gkfvs', 'service': 'network-compliance-exporter'}|value=0

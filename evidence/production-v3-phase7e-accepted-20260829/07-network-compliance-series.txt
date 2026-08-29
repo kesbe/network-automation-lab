@@ -1,0 +1,12 @@
+metric=network_compliance_active_tickets_total|job=network-compliance-exporter|series=1
+metric=network_compliance_devices_noncompliant|job=network-compliance-exporter|series=1
+metric=network_compliance_exporter_db_up|job=network-compliance-exporter|series=1
+metric=network_compliance_exporter_last_success_timestamp_seconds|job=network-compliance-exporter|series=1
+metric=network_compliance_findings|job=network-compliance-exporter|series=1
+metric=network_compliance_findings_oldest_open_seconds|job=network-compliance-exporter|series=1
+metric=network_compliance_passed_checks|job=network_compliance|series=4
+metric=network_compliance_remediation_waiting_approval|job=network-compliance-exporter|series=1
+metric=network_compliance_status|job=network_compliance|series=4
+metric=network_compliance_total_checks|job=network_compliance|series=4
+metric=network_compliance_violations|job=network_compliance|series=4
+network_compliance_metric_job_pairs=11

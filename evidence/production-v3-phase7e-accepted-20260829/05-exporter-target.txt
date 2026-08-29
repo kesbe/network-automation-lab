@@ -1,0 +1,5 @@
+exporter_target_count=1
+health=up
+scrape_url=http://192.168.3.226:9808/metrics
+last_error=''
+phase7e_prometheus_target_gate=PASS

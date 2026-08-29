@@ -1,0 +1,15 @@
+===== EXPORTER WORKLOAD =====
+NAME                          READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS            IMAGES                                                                                                                                                  SELECTOR
+network-compliance-exporter   1/1     1            1           13m   compliance-exporter   753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/network-compliance-exporter@sha256:b13c5c6e171aa07d4c7150b254c308b0dfd4e510bd4ff8af7ffca747bd9701d0   app.kubernetes.io/name=network-compliance-exporter
+
+NAME                                           READY   STATUS    RESTARTS   AGE   IP              NODE                                               NOMINATED NODE   READINESS GATES
+network-compliance-exporter-5d7f7c7656-gkfvs   1/1     Running   0          13m   192.168.3.226   ip-192-168-15-42.ap-southeast-2.compute.internal   <none>           <none>
+
+NAME                          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE   SELECTOR
+network-compliance-exporter   ClusterIP   10.100.147.63   <none>        9808/TCP   13m   app.kubernetes.io/name=network-compliance-exporter
+
+NAME                                ADDRESSTYPE   PORTS   ENDPOINTS       AGE
+network-compliance-exporter-7t9pj   IPv4          9808    192.168.3.226   13m
+
+NAME                          AGE
+network-compliance-exporter   8m25s

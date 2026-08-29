@@ -1,0 +1,2 @@
+pushgateway_target_count=1
+job=network-compliance-pushgateway|health=up|lastError=''|scrapeUrl=http://192.168.93.168:9091/metrics

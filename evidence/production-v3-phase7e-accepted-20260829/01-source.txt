@@ -1,0 +1,8 @@
+===== SOURCE =====
+head=d39318768d4247e8d633b7f64b2720b4b90beb94
+branch=feature/v3-target-production
+worktree_begin
+worktree_end
+
+expected_commit=d39318768d4247e8d633b7f64b2720b4b90beb94
+phase7e_source_provenance_gate=PASS

@@ -1,0 +1,50 @@
+PHASE 7E — COMPLIANCE EXPORTER PRODUCTION ACCEPTANCE
+
+Date:
+2026-08-29 Australia/Sydney
+
+Source commit:
+d39318768d4247e8d633b7f64b2720b4b90beb94
+
+Accepted image digest:
+sha256:b13c5c6e171aa07d4c7150b254c308b0dfd4e510bd4ff8af7ffca747bd9701d0
+
+Production database:
+Migration 008 ACCEPTED
+Migration 009 ACCEPTED
+
+Runtime identity:
+compliance_exporter_runtime ACCEPTED
+LOGIN enabled
+No elevated role attributes
+Member of compliance_exporter
+Approved exporter views readable
+Underlying lifecycle tables not readable
+Lifecycle mutation APIs not executable
+
+Kubernetes:
+Secret compliance-exporter-db ACCEPTED
+Deployment network-compliance-exporter ACCEPTED
+Service network-compliance-exporter ACCEPTED
+ServiceMonitor network-compliance-exporter ACCEPTED
+
+Runtime:
+Pod Ready 1/1
+Runtime image digest verified
+/healthz = 200
+/readyz = 200
+/metrics = 200
+
+Prometheus:
+Exporter target count = 1
+Exporter target health = UP
+Exporter lastError = empty
+network_compliance_exporter_db_up = 1
+
+Legacy coexistence:
+Pushgateway target remains UP
+Accepted V2 remains untouched
+Pushgateway retirement NOT authorized by Phase 7E
+
+FINAL:
+production_phase7e_acceptance_gate=PASS
