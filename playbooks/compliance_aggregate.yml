@@ -39,6 +39,174 @@
           }}
       loop: "{{ network_intent.keys() | list | sort }}"
 
+    - name: Initialize authoritative V3 target inventory
+      ansible.builtin.set_fact:
+        aggregated_v3_target_inventory: []
+
+    - name: Validate authoritative V3 target metadata
+      ansible.builtin.assert:
+        that:
+          - hostvars[item] is defined
+          - hostvars[item].platform is defined
+          - hostvars[item].platform is string
+          - hostvars[item].platform | trim | length > 0
+          - hostvars[item].manufacturer is defined
+          - hostvars[item].manufacturer is string
+          - hostvars[item].manufacturer | trim | length > 0
+        fail_msg: >-
+          Authoritative NetBox inventory metadata is missing
+          mandatory V3 identity fields for {{ item }}.
+      loop: "{{ network_intent.keys() | list | sort }}"
+
+    - name: Build authoritative V3 target inventory
+      ansible.builtin.set_fact:
+        aggregated_v3_target_inventory: >-
+          {{
+            aggregated_v3_target_inventory
+            +
+            [
+              (
+                {
+                  'name': item,
+                  'platform': hostvars[item].platform,
+                  'vendor': hostvars[item].manufacturer,
+                  'tags': (
+                    hostvars[item].tags
+                    | default([])
+                  )
+                }
+                | combine(
+                    (
+                      {
+                        'site': hostvars[item].site
+                      }
+                      if hostvars[item].site is defined
+                      else {}
+                    )
+                  )
+                | combine(
+                    (
+                      {
+                        'role': hostvars[item].role
+                      }
+                      if hostvars[item].role is defined
+                      else {}
+                    )
+                  )
+              )
+            ]
+          }}
+      loop: "{{ network_intent.keys() | list | sort }}"
+
+    - name: Build V3 target resolver input
+      ansible.builtin.set_fact:
+        aggregated_v3_target_resolver_input: >-
+          {{
+            {
+              'selector': {
+                'devices': (
+                  network_intent.keys()
+                  | list
+                  | sort
+                )
+              },
+              'inventory':
+                aggregated_v3_target_inventory
+            }
+          }}
+
+    - name: Resolve canonical V3 target
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - >-
+            {{
+              playbook_dir
+              ~ '/../scripts/v3_target_resolver.py'
+            }}
+        stdin: >-
+          {{
+            aggregated_v3_target_resolver_input
+            | to_json
+          }}
+      register: aggregated_v3_target_resolver_command
+      changed_when: false
+
+    - name: Validate V3 target resolver execution
+      ansible.builtin.assert:
+        that:
+          - aggregated_v3_target_resolver_command.rc == 0
+          - aggregated_v3_target_resolver_command.stdout is string
+          - >-
+            aggregated_v3_target_resolver_command.stdout
+            | trim
+            | length
+            > 0
+        fail_msg: >-
+          Canonical V3 target resolution failed.
+
+    - name: Capture canonical V3 resolved target
+      ansible.builtin.set_fact:
+        aggregated_v3_resolved_target: >-
+          {{
+            aggregated_v3_target_resolver_command.stdout
+            | from_json
+          }}
+
+    - name: Validate resolved target against aggregated run membership
+      ansible.builtin.assert:
+        that:
+          - aggregated_v3_resolved_target is mapping
+          - aggregated_v3_resolved_target.schema_version is defined
+          - >-
+            aggregated_v3_resolved_target.schema_version
+            | string
+            == '3.0'
+          - aggregated_v3_resolved_target.target_id is defined
+          - >-
+            aggregated_v3_resolved_target.target_id
+            | string
+            | length
+            > 0
+          - aggregated_v3_resolved_target.selector is mapping
+          - >-
+            aggregated_v3_resolved_target.selector.devices
+            ==
+            (
+              network_intent.keys()
+              | list
+              | sort
+            )
+          - >-
+            aggregated_v3_resolved_target.device_names
+            ==
+            (
+              network_intent.keys()
+              | list
+              | sort
+            )
+          - >-
+            aggregated_v3_resolved_target.device_count
+            | int
+            ==
+            (
+              network_intent.keys()
+              | list
+              | length
+            )
+          - >-
+            (
+              compliance_device_results
+              | map(attribute='device')
+              | list
+              | sort
+            )
+            ==
+            aggregated_v3_resolved_target.device_names
+        fail_msg: >-
+          Resolved V3 target does not exactly match the
+          aggregated compliance-run membership.
+
     - name: Validate enriched compliance finding contract
       ansible.builtin.assert:
         that:
@@ -452,13 +620,18 @@
       ansible.builtin.debug:
         var: compliance_critical_findings
 
-    - name: Publish structured compliance run artifact
+    - name: Publish structured compliance run and V3 target artifacts
       ansible.builtin.set_stats:
         data:
           compliance_run: >-
             {{
               aggregated_compliance_run
             }}
+          resolved_target: >-
+            {{
+              aggregated_v3_resolved_target
+            }}
+          v3_persistence_enabled: true
         per_host: false
 
     - name: Publish compliance aggregation correlation metadata
