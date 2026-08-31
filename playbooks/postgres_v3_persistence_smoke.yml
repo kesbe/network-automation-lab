@@ -1,0 +1,289 @@
+---
+- name: PostgreSQL V3 transactional persistence API smoke test
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    pg_host: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_HOST') }}"
+    pg_port: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PORT') }}"
+    pg_database: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_DATABASE') }}"
+    pg_username: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_USERNAME') }}"
+    pg_password: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_PASSWORD') }}"
+    pg_sslmode: "{{ lookup('ansible.builtin.env', 'NETAUTO_PG_SSLMODE') }}"
+
+    smoke_compliance_run:
+      schema_version: "1.0"
+      run_id: "awx-v3-postgres-smoke"
+      generated_at: "2026-08-31T00:00:00Z"
+
+      summary:
+        devices_checked: 1
+        devices_compliant: 1
+        devices_noncompliant: 0
+        total_findings: 0
+        critical_findings: 0
+        high_findings: 0
+        medium_findings: 0
+        low_findings: 0
+        info_findings: 0
+
+      device_results:
+        - device: leaf01
+          status: COMPLIANT
+          total_checks: 1
+          passed: 1
+          failed: 0
+          violations: []
+
+      findings: []
+      critical_findings: []
+
+    smoke_resolved_target:
+      schema_version: "3.0"
+      target_id: "target-4ca1ea939749e425b01cf1f448dec657"
+
+      selector:
+        devices:
+          - leaf01
+
+      devices:
+        - name: leaf01
+          platform: frr
+          vendor: generic
+          site: network-lab
+          role: leaf
+          tags: []
+
+      device_names:
+        - leaf01
+
+      device_count: 1
+
+  tasks:
+    - name: Validate non-secret PostgreSQL credential inputs
+      ansible.builtin.assert:
+        that:
+          - pg_host | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_sslmode == 'disable'
+        fail_msg: PostgreSQL V3 smoke credential metadata is invalid
+
+    - name: Validate PostgreSQL password injection
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+        fail_msg: PostgreSQL password was not injected
+      no_log: true
+
+    - name: Build canonical V3 persistence context with frozen adapter
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/../scripts/v3_compliance_persistence_context.py"
+      args:
+        stdin: >-
+          {{
+            {
+              'compliance_run': smoke_compliance_run,
+              'resolved_target': smoke_resolved_target
+            }
+            | to_json
+          }}
+      register: smoke_v3_adapter
+      changed_when: false
+
+    - name: Validate V3 persistence adapter execution
+      ansible.builtin.assert:
+        that:
+          - smoke_v3_adapter.rc == 0
+          - smoke_v3_adapter.stdout | length > 0
+        fail_msg: Frozen V3 persistence-context adapter failed
+
+    - name: Capture canonical V3 persistence context
+      ansible.builtin.set_fact:
+        smoke_v3_persistence_context: >-
+          {{
+            smoke_v3_adapter.stdout
+            | from_json
+          }}
+
+    - name: Validate canonical V3 persistence context
+      ansible.builtin.assert:
+        that:
+          - >-
+            smoke_v3_persistence_context.compliance_run_id
+            == smoke_compliance_run.run_id
+          - >-
+            smoke_v3_persistence_context.resolved_target
+            == smoke_resolved_target
+          - smoke_v3_persistence_context.findings is sequence
+          - smoke_v3_persistence_context.findings | length == 0
+        fail_msg: Canonical V3 persistence context is invalid
+
+    - name: Exercise V3 PostgreSQL writer API and roll back
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+
+        autocommit: true
+
+        query:
+          - BEGIN
+
+          - |
+            SELECT
+              current_database() AS current_database,
+              current_user AS current_user,
+              session_user AS session_user,
+
+              has_function_privilege(
+                current_user,
+                'compliance.ingest_v3_compliance_run(jsonb,jsonb,bigint,bigint,bigint,text,text)',
+                'EXECUTE'
+              ) AS v3_run_api_execute,
+
+              has_table_privilege(
+                current_user,
+                'compliance.compliance_runs',
+                'SELECT'
+              ) AS direct_run_select,
+
+              has_table_privilege(
+                current_user,
+                'compliance.compliance_runs',
+                'INSERT'
+              ) AS direct_run_insert,
+
+              has_table_privilege(
+                current_user,
+                'compliance.v3_run_persistence_contexts',
+                'SELECT'
+              ) AS direct_v3_context_select,
+
+              has_table_privilege(
+                current_user,
+                'compliance.v3_run_persistence_contexts',
+                'INSERT'
+              ) AS direct_v3_context_insert,
+
+              has_table_privilege(
+                current_user,
+                'compliance.v3_activation_sources',
+                'SELECT'
+              ) AS direct_activation_source_select,
+
+              has_table_privilege(
+                current_user,
+                'compliance.v3_activation_sources',
+                'INSERT'
+              ) AS direct_activation_source_insert
+
+          - |
+            SELECT
+              current_user AS database_user,
+              result.*
+            FROM compliance.ingest_v3_compliance_run(
+              %(compliance_run)s::jsonb,
+              %(persistence_context)s::jsonb,
+              NULL,
+              NULL,
+              NULL,
+              'awx-v3-smoke',
+              'compliance_writer'
+            ) AS result
+
+          - ROLLBACK
+
+          - |
+            SELECT
+              current_user AS current_user,
+              true AS rollback_completed
+
+        named_args:
+          compliance_run: "{{ smoke_compliance_run | to_json }}"
+          persistence_context: "{{ smoke_v3_persistence_context | to_json }}"
+
+      register: postgres_v3_smoke
+      no_log: true
+
+    - name: Validate PostgreSQL V3 smoke-test result structure
+      ansible.builtin.assert:
+        that:
+          - postgres_v3_smoke.query_all_results is defined
+          - postgres_v3_smoke.query_all_results | length == 5
+          - postgres_v3_smoke.query_all_results[1] | length == 1
+          - postgres_v3_smoke.query_all_results[2] | length == 1
+          - postgres_v3_smoke.query_all_results[4] | length == 1
+        fail_msg: PostgreSQL V3 smoke returned an unexpected result structure
+
+    - name: Capture safe PostgreSQL V3 smoke results
+      ansible.builtin.set_fact:
+        postgres_v3_identity: "{{ postgres_v3_smoke.query_all_results[1][0] }}"
+        postgres_v3_api_result: "{{ postgres_v3_smoke.query_all_results[2][0] }}"
+        postgres_v3_rollback_result: "{{ postgres_v3_smoke.query_all_results[4][0] }}"
+
+    - name: Assert V3 writer least-privilege identity
+      ansible.builtin.assert:
+        that:
+          - postgres_v3_identity.current_database == 'network_compliance'
+          - postgres_v3_identity.current_user == 'compliance_writer'
+          - postgres_v3_identity.session_user == 'compliance_writer'
+          - postgres_v3_identity.v3_run_api_execute | bool
+          - not (postgres_v3_identity.direct_run_select | bool)
+          - not (postgres_v3_identity.direct_run_insert | bool)
+          - not (postgres_v3_identity.direct_v3_context_select | bool)
+          - not (postgres_v3_identity.direct_v3_context_insert | bool)
+          - not (postgres_v3_identity.direct_activation_source_select | bool)
+          - not (postgres_v3_identity.direct_activation_source_insert | bool)
+        fail_msg: PostgreSQL V3 writer privilege boundary failed
+
+    - name: Assert V3 transactional ingestion API succeeded
+      ansible.builtin.assert:
+        that:
+          - postgres_v3_api_result.database_user == 'compliance_writer'
+          - postgres_v3_api_result.result_run_id == smoke_compliance_run.run_id
+          - postgres_v3_api_result.result_status == 'INSERTED'
+          - postgres_v3_api_result.run_inserted | bool
+          - postgres_v3_api_result.device_results_inserted | int == 1
+          - postgres_v3_api_result.findings_processed | int == 0
+          - postgres_v3_api_result.detected_count | int == 0
+          - postgres_v3_api_result.seen_again_count | int == 0
+          - postgres_v3_api_result.reopened_count | int == 0
+          - postgres_v3_api_result.duplicate_finding_count | int == 0
+          - postgres_v3_api_result.activation_sources_inserted | int == 0
+        fail_msg: PostgreSQL V3 transactional ingestion API failed
+
+    - name: Assert V3 transaction rollback completed
+      ansible.builtin.assert:
+        that:
+          - postgres_v3_rollback_result.current_user == 'compliance_writer'
+          - postgres_v3_rollback_result.rollback_completed | bool
+        fail_msg: PostgreSQL V3 smoke rollback failed
+
+    - name: Report safe PostgreSQL V3 smoke-test result
+      ansible.builtin.debug:
+        msg:
+          database: "{{ postgres_v3_identity.current_database }}"
+          database_user: "{{ postgres_v3_identity.current_user }}"
+          v3_run_api_execute: "{{ postgres_v3_identity.v3_run_api_execute }}"
+          direct_run_select: "{{ postgres_v3_identity.direct_run_select }}"
+          direct_run_insert: "{{ postgres_v3_identity.direct_run_insert }}"
+          direct_v3_context_select: "{{ postgres_v3_identity.direct_v3_context_select }}"
+          direct_v3_context_insert: "{{ postgres_v3_identity.direct_v3_context_insert }}"
+          direct_activation_source_select: "{{ postgres_v3_identity.direct_activation_source_select }}"
+          direct_activation_source_insert: "{{ postgres_v3_identity.direct_activation_source_insert }}"
+          ingestion_status: "{{ postgres_v3_api_result.result_status }}"
+          run_inserted: "{{ postgres_v3_api_result.run_inserted }}"
+          devices_inserted: "{{ postgres_v3_api_result.device_results_inserted }}"
+          findings_processed: "{{ postgres_v3_api_result.findings_processed }}"
+          activation_sources_inserted: "{{ postgres_v3_api_result.activation_sources_inserted }}"
+          rollback_completed: "{{ postgres_v3_rollback_result.rollback_completed }}"
