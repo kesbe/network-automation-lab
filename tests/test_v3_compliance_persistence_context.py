@@ -159,7 +159,24 @@ class V3CompliancePersistenceContextTests(
 
         self.assertEqual(
             tuple(finding),
-            FINDING_FIELDS,
+            FINDING_FIELDS + (
+                "expected",
+            ),
+        )
+
+        self.assertEqual(
+            finding["expected"],
+            2,
+        )
+
+        self.assertNotIn(
+            "actual",
+            finding,
+        )
+
+        self.assertNotIn(
+            "category",
+            finding,
         )
 
         self.assertEqual(
@@ -309,6 +326,172 @@ class V3CompliancePersistenceContextTests(
             ],
             "manual",
         )
+
+    def test_auto_maximum_paths_requires_expected(
+        self,
+    ):
+        run = self._run()
+
+        finding = run[
+            "findings"
+        ][0]
+
+        finding.pop(
+            "expected"
+        )
+
+        with self.assertRaises(
+            PersistenceContextError
+        ):
+            build_persistence_context(
+                compliance_run=run,
+                resolved_target=self._target(),
+            )
+
+    def test_validate_context_rejects_missing_auto_detail(
+        self,
+    ):
+        context = build_persistence_context(
+            compliance_run=self._run(),
+            resolved_target=self._target(),
+        )
+
+        context[
+            "findings"
+        ][0].pop(
+            "expected"
+        )
+
+        with self.assertRaises(
+            PersistenceContextError
+        ):
+            validate_persistence_context(
+                context
+            )
+
+    def test_bgp_neighbor_configuration_preserves_details(
+        self,
+    ):
+        run = self._run()
+
+        finding = run[
+            "findings"
+        ][0]
+
+        finding[
+            "control"
+        ] = "bgp_neighbor_configuration"
+
+        finding.pop(
+            "expected",
+            None,
+        )
+
+        finding[
+            "neighbor"
+        ] = "10.0.0.1"
+
+        finding[
+            "expected_remote_as"
+        ] = 65101
+
+        finding[
+            "expected_description"
+        ] = "LEAF01"
+
+        context = build_persistence_context(
+            compliance_run=run,
+            resolved_target=self._target(),
+        )
+
+        persisted = context[
+            "findings"
+        ][0]
+
+        self.assertEqual(
+            tuple(persisted),
+            FINDING_FIELDS + (
+                "neighbor",
+                "expected_remote_as",
+                "expected_description",
+            ),
+        )
+
+        self.assertEqual(
+            persisted["neighbor"],
+            "10.0.0.1",
+        )
+
+        self.assertEqual(
+            persisted[
+                "expected_remote_as"
+            ],
+            65101,
+        )
+
+        self.assertEqual(
+            persisted[
+                "expected_description"
+            ],
+            "LEAF01",
+        )
+
+        self.assertNotIn(
+            "actual",
+            persisted,
+        )
+
+    def test_auto_bgp_neighbor_requires_all_details(
+        self,
+    ):
+        required = (
+            "neighbor",
+            "expected_remote_as",
+            "expected_description",
+        )
+
+        for missing_field in required:
+            with self.subTest(
+                missing_field=missing_field
+            ):
+                run = self._run()
+
+                finding = run[
+                    "findings"
+                ][0]
+
+                finding[
+                    "control"
+                ] = (
+                    "bgp_neighbor_configuration"
+                )
+
+                finding.pop(
+                    "expected",
+                    None,
+                )
+
+                finding.update({
+                    "neighbor":
+                        "10.0.0.1",
+                    "expected_remote_as":
+                        65101,
+                    "expected_description":
+                        "LEAF01",
+                })
+
+                finding.pop(
+                    missing_field
+                )
+
+                with self.assertRaises(
+                    PersistenceContextError
+                ):
+                    build_persistence_context(
+                        compliance_run=run,
+                        resolved_target=
+                            self._target(),
+                    )
 
     def test_target_missing_finding_device_is_rejected(
         self,

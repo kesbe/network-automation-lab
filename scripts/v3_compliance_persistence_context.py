@@ -72,6 +72,18 @@ PERSISTENCE_CONTEXT_FIELDS = (
 )
 
 
+REMEDIATION_DETAIL_FIELDS_BY_CONTROL = {
+    "maximum_paths": (
+        "expected",
+    ),
+    "bgp_neighbor_configuration": (
+        "neighbor",
+        "expected_remote_as",
+        "expected_description",
+    ),
+}
+
+
 class PersistenceContextError(
     V3ContractError
 ):
@@ -254,6 +266,133 @@ def _validate_finding_target_binding(
         )
 
 
+def _canonical_remediation_detail(
+    *,
+    field: str,
+    value: Any,
+) -> Any:
+    if field == "expected":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+        ):
+            raise PersistenceContextError(
+                "finding.expected must be "
+                "a positive integer"
+            )
+
+        return value
+
+    if field == "expected_remote_as":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value <= 0
+            or value > 4294967295
+        ):
+            raise PersistenceContextError(
+                "finding.expected_remote_as "
+                "must be a valid positive ASN"
+            )
+
+        return value
+
+    if field in {
+        "neighbor",
+        "expected_description",
+    }:
+        return _require_nonempty_string(
+            value,
+            f"finding.{field}",
+        )
+
+    raise PersistenceContextError(
+        "unsupported remediation detail field: "
+        f"{field}"
+    )
+
+
+def _canonical_persistence_finding(
+    finding: dict[str, Any],
+) -> dict[str, Any]:
+    validated = validate_finding(
+        finding
+    )
+
+    if (
+        validated["status"]
+        != "NON_COMPLIANT"
+    ):
+        raise PersistenceContextError(
+            "persistence finding must "
+            "be NON_COMPLIANT"
+        )
+
+    detail_fields = (
+        REMEDIATION_DETAIL_FIELDS_BY_CONTROL.get(
+            validated["control"],
+            (),
+        )
+    )
+
+    allowed_fields = (
+        set(FINDING_FIELDS)
+        | set(detail_fields)
+    )
+
+    unexpected_fields = sorted(
+        set(validated)
+        - allowed_fields
+    )
+
+    if unexpected_fields:
+        raise PersistenceContextError(
+            "persistence finding contains "
+            "unexpected fields: "
+            + ", ".join(
+                unexpected_fields
+            )
+        )
+
+    canonical = {
+        field: validated[field]
+        for field in FINDING_FIELDS
+    }
+
+    for field in detail_fields:
+        if field in validated:
+            canonical[field] = (
+                _canonical_remediation_detail(
+                    field=field,
+                    value=validated[field],
+                )
+            )
+
+    if (
+        validated["remediable"]
+        and validated[
+            "remediation_policy"
+        ] == "auto"
+    ):
+        missing = [
+            field
+            for field in detail_fields
+            if field not in canonical
+        ]
+
+        if missing:
+            raise PersistenceContextError(
+                "automatic remediation finding "
+                "is missing required detail fields: "
+                + ", ".join(
+                    missing
+                )
+            )
+
+    return canonical
+
+
 def _canonical_finding(
     *,
     finding: dict[str, Any],
@@ -373,23 +512,22 @@ def _canonical_finding(
             ticket_required,
     }
 
-    validated = validate_finding(
-        candidate
-    )
-
-    if (
-        validated["status"]
-        != "NON_COMPLIANT"
-    ):
-        raise PersistenceContextError(
-            "canonical persistence finding "
-            "must be NON_COMPLIANT"
+    for field in (
+        REMEDIATION_DETAIL_FIELDS_BY_CONTROL.get(
+            candidate["control"],
+            (),
         )
+    ):
+        if field in finding:
+            candidate[field] = copy.deepcopy(
+                finding[field]
+            )
 
-    canonical = {
-        field: validated[field]
-        for field in FINDING_FIELDS
-    }
+    canonical = (
+        _canonical_persistence_finding(
+            candidate
+        )
+    )
 
     _validate_finding_target_binding(
         finding=canonical,
@@ -553,31 +691,11 @@ def validate_persistence_context(
             "persistence finding",
         )
 
-        if set(finding) != set(
-            FINDING_FIELDS
-        ):
-            raise PersistenceContextError(
-                "persistence finding fields "
-                "are not canonical"
+        canonical = (
+            _canonical_persistence_finding(
+                finding
             )
-
-        validated = validate_finding(
-            finding
         )
-
-        if (
-            validated["status"]
-            != "NON_COMPLIANT"
-        ):
-            raise PersistenceContextError(
-                "persistence finding must "
-                "be NON_COMPLIANT"
-            )
-
-        canonical = {
-            field: validated[field]
-            for field in FINDING_FIELDS
-        }
 
         _validate_finding_target_binding(
             finding=canonical,
