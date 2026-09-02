@@ -24,7 +24,11 @@
           - transport_event_id is defined
           - transport_event_id | string | length > 0
           - transport_event_type is defined
-          - transport_event_type | string == 'NETWORK_COMPLIANCE_DRIFT_DETECTED'
+          - transport_event_type | string in
+            [
+              'NETWORK_COMPLIANCE_DRIFT_DETECTED',
+              'NETWORK_COMPLIANCE_FINDING_ACTIVATED'
+            ]
           - compliance_run_id is defined
           - compliance_run_id | string | length > 0
           - awx_job_id is defined

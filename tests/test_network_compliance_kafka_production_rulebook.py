@@ -223,5 +223,120 @@ class ProductionKafkaRulebookTests(unittest.TestCase):
             )
 
 
+    def test_v3_frr_activation_rule_exists(self):
+        rules = self.ruleset["rules"]
+
+        self.assertEqual(
+            len(rules),
+            2,
+        )
+
+        condition = rules[1]["condition"]
+
+        for value in (
+            "NETWORK_COMPLIANCE_FINDING_ACTIVATED",
+            "DETECTED",
+            "REOPENED",
+            "event.body.finding.remediable == true",
+            'event.body.finding.remediation_policy == "auto"',
+            'event.body.finding.vendor == "generic"',
+            'event.body.finding.platform == "frr"',
+        ):
+            self.assertIn(
+                value,
+                condition,
+            )
+
+    def test_v3_rule_uses_existing_durable_wrapper(self):
+        action = (
+            self.ruleset["rules"][1]
+            ["action"]
+            ["run_workflow_template"]
+        )
+
+        self.assertEqual(
+            action["name"],
+            "WF03-T-NB - Durable Compliance Transport Wrapper",
+        )
+
+        self.assertEqual(
+            action["organization"],
+            "Default",
+        )
+
+        self.assertIs(
+            action["include_events"],
+            False,
+        )
+
+    def test_v3_rule_uses_top_level_run_identity(self):
+        action = (
+            self.ruleset["rules"][1]
+            ["action"]
+            ["run_workflow_template"]
+        )
+
+        extra_vars = (
+            action["job_args"]
+            ["extra_vars"]
+        )
+
+        self.assertEqual(
+            set(extra_vars),
+            {
+                "transport_event_id",
+                "transport_event_type",
+                "compliance_run_id",
+            },
+        )
+
+        self.assertEqual(
+            extra_vars["transport_event_id"],
+            "{{ event.body.event_id }}",
+        )
+
+        self.assertEqual(
+            extra_vars["transport_event_type"],
+            "{{ event.body.event_type }}",
+        )
+
+        self.assertEqual(
+            extra_vars["compliance_run_id"],
+            "{{ event.body.compliance_run_id }}",
+        )
+
+    def test_v3_rule_has_no_retry_or_feedback(self):
+        action = (
+            self.ruleset["rules"][1]
+            ["action"]
+            ["run_workflow_template"]
+        )
+
+        self.assertIs(
+            action["retry"],
+            False,
+        )
+        self.assertEqual(
+            action["retries"],
+            0,
+        )
+        self.assertEqual(
+            action["delay"],
+            0,
+        )
+        self.assertIs(
+            action["set_facts"],
+            False,
+        )
+        self.assertIs(
+            action["post_events"],
+            False,
+        )
+        self.assertIs(
+            action["add_event_uuid_label"],
+            False,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
