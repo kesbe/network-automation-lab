@@ -260,7 +260,33 @@ class V3ActivationEventPrepareOrchestrationTests(
         )
 
         self.assertIn(
-            "else []",
+            "not (v3_persistence_is_new | bool)",
+            self.source,
+        )
+
+    def test_zero_row_reader_uses_documented_rowcount(self):
+        self.assertIn(
+            "v3_activation_source_query.rowcount is defined",
+            self.source,
+        )
+
+        self.assertIn(
+            "Validate normalized V3 activation source count",
+            self.source,
+        )
+
+        self.assertIn(
+            "v3_activation_source_query.rowcount",
+            self.source,
+        )
+
+        self.assertIn(
+            "query_all_results[0]",
+            self.source,
+        )
+
+        self.assertNotIn(
+            "query_result[0]",
             self.source,
         )
 

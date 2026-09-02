@@ -184,6 +184,28 @@
           - >-
             v3_activation_source_query.query_all_results
             | length == 1
+          - v3_activation_source_query.rowcount is defined
+          - >-
+            (
+              v3_activation_source_query.rowcount
+              | int
+            ) >= 0
+          - >-
+            (
+              v3_activation_source_query.rowcount
+              | int
+            ) == 0
+            or
+            (
+              v3_activation_source_query
+              .query_all_results[0]
+              | length
+            )
+            ==
+            (
+              v3_activation_source_query.rowcount
+              | int
+            )
         fail_msg: >-
           V3 activation-source reader returned an
           unexpected query structure
@@ -192,13 +214,41 @@
       ansible.builtin.set_fact:
         v3_activation_sources: >-
           {{
+            []
+            if (
+              not (v3_persistence_is_new | bool)
+              or
+              (
+                v3_activation_source_query.rowcount
+                | int
+              ) == 0
+            )
+            else
             (
               v3_activation_source_query
               .query_all_results[0]
             )
-            if (v3_persistence_is_new | bool)
-            else []
           }}
+      no_log: true
+
+    - name: Validate normalized V3 activation source count
+      ansible.builtin.assert:
+        that:
+          - >-
+            v3_activation_sources
+            | length
+            ==
+            (
+              (
+                v3_activation_source_query.rowcount
+                | int
+              )
+              if (v3_persistence_is_new | bool)
+              else 0
+            )
+        fail_msg: >-
+          Normalized V3 activation-source count
+          does not match the PostgreSQL reader rowcount
       no_log: true
 
     - name: Validate durable V3 activation source rows
