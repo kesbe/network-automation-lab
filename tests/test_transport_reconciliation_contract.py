@@ -72,13 +72,17 @@ def test_playbook_requires_production_wrapper_provenance():
 
 
 def test_only_failure_terminal_states_are_eligible():
-    assert "- failed" in PLAYBOOK
-    assert "- error" in PLAYBOOK
-    assert "- canceled" in PLAYBOOK
-
     allowed_section = PLAYBOOK.split(
-        "safe_previous_workflow_terminal_states:"
-    )[1].split("tasks:")[0]
+        "safe_previous_workflow_terminal_states:",
+        1,
+    )[1].split(
+        "safe_previous_descendant_terminal_states:",
+        1,
+    )[0]
+
+    assert "- failed" in allowed_section
+    assert "- error" in allowed_section
+    assert "- canceled" in allowed_section
 
     assert "successful" not in allowed_section
     assert "running" not in allowed_section
