@@ -1,0 +1,399 @@
+---
+- name: Prepare canonical V3 compliance activation events
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pg_host: >-
+      {{
+        lookup('env', 'NETAUTO_PG_HOST')
+      }}
+
+    pg_port: >-
+      {{
+        lookup('env', 'NETAUTO_PG_PORT')
+        | default('5432', true)
+      }}
+
+    pg_database: >-
+      {{
+        lookup('env', 'NETAUTO_PG_DATABASE')
+      }}
+
+    pg_username: >-
+      {{
+        lookup('env', 'NETAUTO_PG_USERNAME')
+      }}
+
+    pg_password: >-
+      {{
+        lookup('env', 'NETAUTO_PG_PASSWORD')
+      }}
+
+    pg_sslmode: >-
+      {{
+        lookup('env', 'NETAUTO_PG_SSLMODE')
+        | default('disable', true)
+      }}
+
+    v3_input_persistence: >-
+      {{
+        compliance_persistence
+        | default({})
+      }}
+
+    v3_run_id: >-
+      {{
+        (
+          compliance_persistence
+          | default({})
+        ).get('run_id', '')
+        | string
+        | trim
+      }}
+
+    v3_persistence_is_new: >-
+      {{
+        (
+          v3_input_persistence.result_status
+          | default('')
+        ) == 'INSERTED'
+        and
+        (
+          v3_input_persistence.run_inserted
+          | default(false)
+          | bool
+        )
+      }}
+
+    v3_activation_adapter_path: >-
+      {{
+        playbook_dir
+        ~ '/../scripts/v3_activation_event_adapter.py'
+      }}
+
+  tasks:
+    - name: Validate V3 activation preparation inputs
+      ansible.builtin.assert:
+        that:
+          - v3_input_persistence is mapping
+          - v3_run_id | length > 0
+          - v3_input_persistence.result_status is defined
+          - >-
+            v3_input_persistence.result_status
+            in ['INSERTED', 'DUPLICATE']
+          - v3_input_persistence.run_inserted is defined
+          - >-
+            (
+              v3_input_persistence.result_status == 'INSERTED'
+              and
+              (v3_input_persistence.run_inserted | bool)
+            )
+            or
+            (
+              v3_input_persistence.result_status == 'DUPLICATE'
+              and
+              not (v3_input_persistence.run_inserted | bool)
+            )
+          - v3_input_persistence.persistence_job_id is defined
+          - v3_input_persistence.persistence_job_id | int > 0
+          - awx_job_id is defined
+          - awx_job_id | int > 0
+          - pg_host | string | trim | length > 0
+          - pg_port | int > 0
+          - pg_database == 'network_compliance'
+          - pg_username == 'compliance_writer'
+          - pg_password | string | length > 0
+          - pg_sslmode == 'disable'
+        fail_msg: >-
+          V3 activation event preparation input or
+          PostgreSQL runtime contract is invalid
+
+    - name: Verify controlled PostgreSQL reader identity
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT
+            current_database() AS database_name,
+            current_user AS database_user;
+      register: v3_reader_identity_query
+      no_log: true
+
+    - name: Validate controlled PostgreSQL reader identity response
+      ansible.builtin.assert:
+        that:
+          - v3_reader_identity_query.query_all_results is defined
+          - v3_reader_identity_query.query_all_results | length == 1
+          - >-
+            v3_reader_identity_query.query_all_results[0]
+            | length == 1
+          - >-
+            v3_reader_identity_query.query_all_results[0][0].database_name
+            == 'network_compliance'
+          - >-
+            v3_reader_identity_query.query_all_results[0][0].database_user
+            == 'compliance_writer'
+        fail_msg: >-
+          V3 activation reader PostgreSQL identity
+          is outside the approved runtime boundary
+
+    - name: Read durable V3 activation sources for persisted run
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT
+            source.finding_event_id,
+            source.run_id,
+            source.finding_id,
+            source.lifecycle_event_type,
+            to_char(
+              source.activated_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            ) AS activated_at,
+            source.finding_snapshot,
+            source.resolved_target
+          FROM compliance.read_v3_activation_sources_for_run(
+            %(run_id)s::text
+          ) AS source
+          ORDER BY source.finding_event_id ASC;
+        named_args:
+          run_id: "{{ v3_run_id }}"
+      register: v3_activation_source_query
+      no_log: true
+
+    - name: Validate V3 activation source query structure
+      ansible.builtin.assert:
+        that:
+          - v3_activation_source_query.query_all_results is defined
+          - >-
+            v3_activation_source_query.query_all_results
+            | length == 1
+        fail_msg: >-
+          V3 activation-source reader returned an
+          unexpected query structure
+
+    - name: Capture durable V3 activation sources
+      ansible.builtin.set_fact:
+        v3_activation_sources: >-
+          {{
+            (
+              v3_activation_source_query
+              .query_all_results[0]
+            )
+            if (v3_persistence_is_new | bool)
+            else []
+          }}
+      no_log: true
+
+    - name: Validate durable V3 activation source rows
+      ansible.builtin.assert:
+        that:
+          - item.finding_event_id | int > 0
+          - item.run_id == v3_run_id
+          - item.finding_id is string
+          - item.finding_id | trim | length > 0
+          - >-
+            item.lifecycle_event_type
+            in ['DETECTED', 'REOPENED']
+          - item.activated_at is string
+          - item.activated_at | trim | length > 0
+          - item.finding_snapshot is mapping
+          - item.resolved_target is mapping
+          - >-
+            item.finding_snapshot.finding_id
+            == item.finding_id
+        fail_msg: >-
+          Durable V3 activation source failed
+          structural validation
+      loop: "{{ v3_activation_sources }}"
+      no_log: true
+
+    - name: Initialize canonical V3 event batch
+      ansible.builtin.set_fact:
+        v3_canonical_events: []
+        v3_finding_event_ids: >-
+          {{
+            v3_activation_sources
+            | map(attribute='finding_event_id')
+            | map('int')
+            | list
+          }}
+
+    - name: Build canonical V3 event from each durable activation source
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ v3_activation_adapter_path }}"
+        stdin: "{{ item | to_json }}"
+        stdin_add_newline: true
+        strip_empty_ends: true
+      loop: "{{ v3_activation_sources }}"
+      register: v3_activation_adapter_results
+      changed_when: false
+      no_log: true
+
+    - name: Validate activation adapter executions
+      ansible.builtin.assert:
+        that:
+          - item.rc == 0
+          - item.stdout | trim | length > 0
+          - item.stderr | default('') | trim | length == 0
+        fail_msg: >-
+          Frozen V3 activation event adapter failed
+      loop: >-
+        {{
+          v3_activation_adapter_results.results
+          | default([])
+        }}
+      no_log: true
+
+    - name: Accumulate canonical V3 activation events
+      ansible.builtin.set_fact:
+        v3_canonical_events: >-
+          {{
+            v3_canonical_events
+            + [
+                item.stdout
+                | from_json
+              ]
+          }}
+      loop: >-
+        {{
+          v3_activation_adapter_results.results
+          | default([])
+        }}
+      no_log: true
+
+    - name: Validate canonical V3 event batch
+      ansible.builtin.assert:
+        that:
+          - >-
+            v3_canonical_events | length
+            == v3_activation_sources | length
+          - >-
+            (
+              v3_canonical_events
+              | map(attribute='event_id')
+              | list
+              | unique
+              | length
+            )
+            == v3_canonical_events | length
+          - >-
+            (
+              v3_finding_event_ids
+              | unique
+              | length
+            )
+            == v3_finding_event_ids | length
+        fail_msg: >-
+          Canonical V3 activation event batch
+          failed count or identity validation
+
+    - name: Validate canonical V3 event contracts
+      ansible.builtin.assert:
+        that:
+          - item.schema_version == '3.0'
+          - >-
+            item.event_type
+            == 'NETWORK_COMPLIANCE_FINDING_ACTIVATED'
+          - item.compliance_run_id == v3_run_id
+          - >-
+            item.lifecycle_event_type
+            in ['DETECTED', 'REOPENED']
+          - item.event_id is string
+          - >-
+            item.event_id.startswith(
+              'v3-compliance-event-'
+            )
+          - item.finding is mapping
+          - item.target is mapping
+        fail_msg: >-
+          Canonical V3 activation event contract
+          failed after frozen adapter execution
+      loop: "{{ v3_canonical_events }}"
+      no_log: true
+
+    - name: Publish safe V3 activation event batch artifact
+      ansible.builtin.set_stats:
+        data:
+          v3_activation_event_batch:
+            run_id: "{{ v3_run_id }}"
+            persistence_result_status: >-
+              {{
+                v3_input_persistence.result_status
+              }}
+            persistence_run_inserted: >-
+              {{
+                v3_input_persistence.run_inserted
+                | bool
+              }}
+            decision: >-
+              {{
+                'PERSISTENCE_DUPLICATE'
+                if not (v3_persistence_is_new | bool)
+                else
+                (
+                  'ACTIVATIONS_PREPARED'
+                  if (
+                    v3_canonical_events
+                    | length
+                  ) > 0
+                  else
+                  'NO_ACTIVATIONS'
+                )
+              }}
+            activation_count: >-
+              {{
+                v3_canonical_events
+                | length
+                | int
+              }}
+            finding_event_ids: "{{ v3_finding_event_ids }}"
+            events: "{{ v3_canonical_events }}"
+            persistence_job_id: >-
+              {{
+                v3_input_persistence
+                .persistence_job_id
+                | int
+              }}
+            preparer_job_id: "{{ awx_job_id | int }}"
+        per_host: false
+
+    - name: Report safe V3 activation event preparation summary
+      ansible.builtin.debug:
+        msg:
+          run_id: "{{ v3_run_id }}"
+          decision: >-
+            {{
+              'PERSISTENCE_DUPLICATE'
+              if not (v3_persistence_is_new | bool)
+              else
+              (
+                'ACTIVATIONS_PREPARED'
+                if (
+                  v3_canonical_events
+                  | length
+                ) > 0
+                else
+                'NO_ACTIVATIONS'
+              )
+            }}
+          activation_count: "{{ v3_canonical_events | length }}"
+          finding_event_ids: "{{ v3_finding_event_ids }}"
