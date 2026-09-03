@@ -1,0 +1,44 @@
+---
+- name: Network Compliance Kafka V3 Validation
+  hosts: all
+
+  sources:
+    - name: V3 compliance validation Kafka source
+      ansible.eda.kafka:
+        host: network-automation-kafka-kafka-bootstrap.kafka.svc
+        port: "9092"
+        topic: network.compliance.events
+        group_id: eda-network-compliance-v3-validation
+        offset: latest
+
+  rules:
+    - name: Validate V3 FRR finding activation through isolated AWX sink
+      condition: >-
+        event.body.event_type
+        == "NETWORK_COMPLIANCE_FINDING_ACTIVATED"
+        and event.body.lifecycle_event_type
+        in ["DETECTED", "REOPENED"]
+        and event.body.finding.remediable == true
+        and event.body.finding.remediation_policy == "auto"
+        and event.body.finding.vendor == "generic"
+        and event.body.finding.platform == "frr"
+      action:
+        run_job_template:
+          name: NW02-EV-V3-VAL - Validate EDA Activation Event
+          organization: Default
+          include_events: false
+          retry: false
+          retries: 0
+          delay: 0
+          add_event_uuid_label: false
+          job_args:
+            extra_vars:
+              v3_eda_event:
+                schema_version: "{{ event.body.schema_version }}"
+                event_id: "{{ event.body.event_id }}"
+                event_type: "{{ event.body.event_type }}"
+                compliance_run_id: "{{ event.body.compliance_run_id }}"
+                lifecycle_event_type: "{{ event.body.lifecycle_event_type }}"
+                activated_at: "{{ event.body.activated_at }}"
+                finding: "{{ event.body.finding }}"
+                target: "{{ event.body.target }}"

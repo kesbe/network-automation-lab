@@ -1,0 +1,128 @@
+---
+- name: Validate isolated V3 EDA compliance activation event
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Validate V3 EDA event envelope
+      ansible.builtin.assert:
+        that:
+          - v3_eda_event is defined
+          - v3_eda_event is mapping
+          - v3_eda_event.schema_version | default('') == '3.0'
+          - >
+            v3_eda_event.event_type | default('')
+            == 'NETWORK_COMPLIANCE_FINDING_ACTIVATED'
+          - v3_eda_event.event_id is defined
+          - >
+            v3_eda_event.event_id | string
+            is match('^v3-compliance-event-[0-9a-f]{32}$')
+          - v3_eda_event.compliance_run_id is defined
+          - v3_eda_event.compliance_run_id | string | length > 0
+          - >
+            v3_eda_event.lifecycle_event_type | default('')
+            in ['DETECTED', 'REOPENED']
+          - v3_eda_event.activated_at is defined
+          - v3_eda_event.activated_at | string | length > 0
+          - v3_eda_event.finding is defined
+          - v3_eda_event.finding is mapping
+          - v3_eda_event.target is defined
+          - v3_eda_event.target is mapping
+        fail_msg: Isolated V3 EDA event envelope is invalid.
+
+    - name: Validate V3 EDA finding contract
+      ansible.builtin.assert:
+        that:
+          - v3_eda_event.finding.finding_id is defined
+          - v3_eda_event.finding.finding_id | string | length > 0
+          - v3_eda_event.finding.device is defined
+          - v3_eda_event.finding.device | string | length > 0
+          - v3_eda_event.finding.vendor | default('') == 'generic'
+          - v3_eda_event.finding.platform | default('') == 'frr'
+          - v3_eda_event.finding.control is defined
+          - v3_eda_event.finding.control | string | length > 0
+          - v3_eda_event.finding.severity is defined
+          - v3_eda_event.finding.severity | string | length > 0
+          - v3_eda_event.finding.status | default('') == 'NON_COMPLIANT'
+          - v3_eda_event.finding.remediable | default(false) | bool
+          - v3_eda_event.finding.remediation_policy | default('') == 'auto'
+          - v3_eda_event.finding.ticket_required is defined
+        fail_msg: Isolated V3 EDA finding contract is invalid.
+
+    - name: Validate V3 EDA target contract
+      ansible.builtin.assert:
+        that:
+          - v3_eda_event.target.schema_version | default('') == '3.0'
+          - v3_eda_event.target.target_id is defined
+          - >
+            v3_eda_event.target.target_id | string
+            is match('^target-[0-9a-f]{32}$')
+          - v3_eda_event.target.selector is defined
+          - v3_eda_event.target.selector is mapping
+          - v3_eda_event.target.device_names is defined
+          - v3_eda_event.target.device_names is sequence
+          - v3_eda_event.target.device_names is not string
+          - v3_eda_event.target.devices is defined
+          - v3_eda_event.target.devices is sequence
+          - v3_eda_event.target.devices is not string
+          - >
+            v3_eda_event.target.device_count | int
+            == (v3_eda_event.target.devices | length)
+          - >
+            v3_eda_event.finding.device
+            in v3_eda_event.target.device_names
+          - >
+            (
+              v3_eda_event.target.devices
+              | selectattr(
+                  'name',
+                  'equalto',
+                  v3_eda_event.finding.device
+                )
+              | list
+              | length
+            ) == 1
+          - >
+            (
+              v3_eda_event.target.devices
+              | selectattr(
+                  'name',
+                  'equalto',
+                  v3_eda_event.finding.device
+                )
+              | map(attribute='platform')
+              | list
+            ) == [v3_eda_event.finding.platform]
+          - >
+            (
+              v3_eda_event.target.devices
+              | selectattr(
+                  'name',
+                  'equalto',
+                  v3_eda_event.finding.device
+                )
+              | map(attribute='vendor')
+              | list
+            ) == [v3_eda_event.finding.vendor]
+        fail_msg: Isolated V3 EDA target binding is invalid.
+
+    - name: Publish isolated V3 EDA validation receipt
+      ansible.builtin.set_stats:
+        data:
+          v3_eda_validation:
+            decision: EDA_EVENT_VALIDATED
+            schema_version: "{{ v3_eda_event.schema_version }}"
+            event_id: "{{ v3_eda_event.event_id }}"
+            event_type: "{{ v3_eda_event.event_type }}"
+            compliance_run_id: "{{ v3_eda_event.compliance_run_id }}"
+            lifecycle_event_type: "{{ v3_eda_event.lifecycle_event_type }}"
+            finding_id: "{{ v3_eda_event.finding.finding_id }}"
+            device: "{{ v3_eda_event.finding.device }}"
+            vendor: "{{ v3_eda_event.finding.vendor }}"
+            platform: "{{ v3_eda_event.finding.platform }}"
+            control: "{{ v3_eda_event.finding.control }}"
+            target_id: "{{ v3_eda_event.target.target_id }}"
+            validator_job_id: "{{ awx_job_id | default(0) | int }}"
+            side_effects: none
+        per_host: false
