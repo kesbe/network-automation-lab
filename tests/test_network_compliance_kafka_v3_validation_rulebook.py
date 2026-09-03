@@ -158,6 +158,57 @@ class NetworkComplianceKafkaV3ValidationRulebookTests(
             self.text,
         )
 
+    def test_schema_version_forwarding_preserves_string_type(self):
+        event_vars = (
+            self.data[0]
+            ["rules"][0]
+            ["action"]
+            ["run_job_template"]
+            ["job_args"]
+            ["extra_vars"]
+            ["v3_eda_event"]
+        )
+
+        self.assertEqual(
+            event_vars["schema_version"],
+            '"{{ event.body.schema_version }}"',
+        )
+
+        self.assertEqual(
+            event_vars["event_id"],
+            "{{ event.body.event_id }}",
+        )
+
+        self.assertEqual(
+            event_vars["event_type"],
+            "{{ event.body.event_type }}",
+        )
+
+        self.assertEqual(
+            event_vars["compliance_run_id"],
+            "{{ event.body.compliance_run_id }}",
+        )
+
+        self.assertEqual(
+            event_vars["lifecycle_event_type"],
+            "{{ event.body.lifecycle_event_type }}",
+        )
+
+        self.assertEqual(
+            event_vars["activated_at"],
+            "{{ event.body.activated_at }}",
+        )
+
+        self.assertEqual(
+            event_vars["finding"],
+            "{{ event.body.finding }}",
+        )
+
+        self.assertEqual(
+            event_vars["target"],
+            "{{ event.body.target }}",
+        )
+
     def test_no_workflow_or_production_target(self):
         prohibited = (
             "run_workflow_template",

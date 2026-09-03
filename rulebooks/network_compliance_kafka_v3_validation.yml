@@ -34,7 +34,7 @@
           job_args:
             extra_vars:
               v3_eda_event:
-                schema_version: "{{ event.body.schema_version }}"
+                schema_version: '"{{ event.body.schema_version }}"'
                 event_id: "{{ event.body.event_id }}"
                 event_type: "{{ event.body.event_type }}"
                 compliance_run_id: "{{ event.body.compliance_run_id }}"
