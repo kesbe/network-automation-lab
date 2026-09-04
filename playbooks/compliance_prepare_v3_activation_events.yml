@@ -102,7 +102,7 @@
           - pg_host | string | trim | length > 0
           - pg_port | int > 0
           - pg_database == 'network_compliance'
-          - pg_username == 'compliance_writer'
+          - pg_username == 'compliance_v3_reader_runtime'
           - pg_password | string | length > 0
           - pg_sslmode == 'disable'
         fail_msg: >-
@@ -140,7 +140,7 @@
             == 'network_compliance'
           - >-
             v3_reader_identity_query.query_all_results[0][0].database_user
-            == 'compliance_writer'
+            == 'compliance_v3_reader_runtime'
         fail_msg: >-
           V3 activation reader PostgreSQL identity
           is outside the approved runtime boundary

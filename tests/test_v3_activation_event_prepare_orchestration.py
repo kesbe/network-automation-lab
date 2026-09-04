@@ -91,8 +91,20 @@ class V3ActivationEventPrepareOrchestrationTests(
         )
 
         self.assertIn(
-            "pg_username == 'compliance_writer'",
+            "pg_username == 'compliance_v3_reader_runtime'",
             self.source,
+        )
+
+        self.assertIn(
+            "v3_reader_identity_query.query_all_results[0][0].database_user",
+            self.source,
+        )
+
+        self.assertEqual(
+            self.source.count(
+                "== 'compliance_v3_reader_runtime'"
+            ),
+            2,
         )
 
         self.assertIn(
