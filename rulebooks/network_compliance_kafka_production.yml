@@ -43,3 +43,35 @@
           set_facts: false
           post_events: false
           add_event_uuid_label: false
+
+    - name: Launch governed V3 FRR finding activation transport workflow
+      condition: >
+        event.body.event_type ==
+        "NETWORK_COMPLIANCE_FINDING_ACTIVATED"
+        and event.body.lifecycle_event_type in
+        ["DETECTED", "REOPENED"]
+        and event.body.finding.remediable == true
+        and event.body.finding.remediation_policy == "auto"
+        and event.body.finding.vendor == "generic"
+        and event.body.finding.platform == "frr"
+
+      action:
+        run_workflow_template:
+          name: "WF03-T-NB - Durable Compliance Transport Wrapper"
+          organization: "Default"
+
+          include_events: false
+
+          job_args:
+            extra_vars:
+              transport_event_id: "{{ event.body.event_id }}"
+              transport_event_type: "{{ event.body.event_type }}"
+              compliance_run_id: "{{ event.body.compliance_run_id }}"
+
+          retry: false
+          retries: 0
+          delay: 0
+
+          set_facts: false
+          post_events: false
+          add_event_uuid_label: false
