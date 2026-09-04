@@ -56,6 +56,169 @@
           AWX compliance correlation metadata is missing,
           invalid, or inconsistent with the active workflow
 
+    - name: Validate DB-bound device status contract
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+          - item.status is defined
+          - item.status | string in [
+              'COMPLIANT',
+              'NON_COMPLIANT',
+              'NON-COMPLIANT'
+            ]
+        fail_msg: >-
+          Unsupported compliance device status for PostgreSQL
+          persistence boundary
+      loop: "{{ compliance_run.device_results }}"
+      loop_control:
+        label: "{{ item.device | default('UNKNOWN') }}"
+
+    - name: Initialize DB-bound device results
+      ansible.builtin.set_fact:
+        db_compliance_device_results: []
+
+    - name: Normalize device status for legacy PostgreSQL storage
+      ansible.builtin.set_fact:
+        db_compliance_device_results: >-
+          {{
+            db_compliance_device_results
+            +
+            [
+              item
+              | combine(
+                  {
+                    'status':
+                      db_device_status_map[
+                        item.status | string
+                      ]
+                  },
+                  recursive=True
+                )
+            ]
+          }}
+      vars:
+        db_device_status_map:
+          COMPLIANT: COMPLIANT
+          NON_COMPLIANT: NON-COMPLIANT
+          NON-COMPLIANT: NON-COMPLIANT
+      loop: "{{ compliance_run.device_results }}"
+      loop_control:
+        label: "{{ item.device | default('UNKNOWN') }}"
+
+    - name: Build PostgreSQL-compatible compliance run copy
+      ansible.builtin.set_fact:
+        db_compliance_run: >-
+          {{
+            compliance_run
+            | combine(
+                {
+                  'device_results':
+                    db_compliance_device_results
+                },
+                recursive=True
+              )
+          }}
+
+    - name: Validate PostgreSQL compatibility copy
+      ansible.builtin.assert:
+        that:
+          - db_compliance_run is mapping
+          - db_compliance_run.run_id == compliance_run.run_id
+          - db_compliance_run.summary == compliance_run.summary
+          - db_compliance_run.findings == compliance_run.findings
+          - db_compliance_run.critical_findings == compliance_run.critical_findings
+          - db_compliance_run.device_results | length == compliance_run.device_results | length
+          - >-
+            (
+              db_compliance_run.device_results
+              | rejectattr(
+                  'status',
+                  'in',
+                  ['COMPLIANT', 'NON-COMPLIANT']
+                )
+              | list
+              | length
+            ) == 0
+        fail_msg: >-
+          PostgreSQL compliance-run compatibility mapping
+          failed closed
+
+    - name: Resolve compliance persistence contract mode
+      ansible.builtin.set_fact:
+        v3_persistence_active: >-
+          {{
+            v3_persistence_enabled
+            | default(false)
+            | bool
+          }}
+
+    - name: Validate explicit V3 resolved target input
+      ansible.builtin.assert:
+        that:
+          - resolved_target is defined
+          - resolved_target is mapping
+          - resolved_target.schema_version is defined
+          - resolved_target.schema_version | string == '3.0'
+          - resolved_target.target_id is defined
+          - resolved_target.target_id | string | length > 0
+          - resolved_target.selector is defined
+          - resolved_target.selector is mapping
+          - resolved_target.devices is defined
+          - resolved_target.devices is sequence
+          - resolved_target.device_count is defined
+          - resolved_target.device_count | int > 0
+        fail_msg: >-
+          V3 persistence requires an explicit canonical resolved_target
+          from the authoritative target-resolution path
+      when: v3_persistence_active | bool
+
+    - name: Build canonical V3 persistence context
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - >-
+            {{
+              playbook_dir
+              ~ '/../scripts/v3_compliance_persistence_context.py'
+            }}
+        stdin: >-
+          {{
+            {
+              'compliance_run': compliance_run,
+              'resolved_target': resolved_target
+            }
+            | to_json
+          }}
+      register: v3_persistence_context_command
+      changed_when: false
+      when: v3_persistence_active | bool
+
+    - name: Capture canonical V3 persistence context
+      ansible.builtin.set_fact:
+        v3_persistence_context: >-
+          {{
+            v3_persistence_context_command.stdout
+            | from_json
+          }}
+      when: v3_persistence_active | bool
+
+    - name: Validate canonical V3 persistence context
+      ansible.builtin.assert:
+        that:
+          - v3_persistence_context is mapping
+          - v3_persistence_context.schema_version == '3.0'
+          - >-
+            v3_persistence_context.compliance_run_id
+            == compliance_run.run_id
+          - v3_persistence_context.resolved_target == resolved_target
+          - v3_persistence_context.findings is sequence
+          - >-
+            v3_persistence_context.findings | length
+            == compliance_run.findings | length
+        fail_msg: >-
+          Canonical V3 persistence context failed orchestration validation
+      when: v3_persistence_active | bool
+
     - name: Validate PostgreSQL credential metadata
       ansible.builtin.assert:
         that:
@@ -97,7 +260,7 @@
             %(actor)s::text
           ) AS result
         named_args:
-          compliance_run: "{{ compliance_run | to_json }}"
+          compliance_run: "{{ db_compliance_run | to_json }}"
           workflow_job_id: "{{ workflow_job_id | int }}"
           compliance_job_id: "{{ compliance_job_id | int }}"
           aggregator_job_id: "{{ aggregator_job_id | int }}"
@@ -105,6 +268,51 @@
           actor: "awx-job-{{ awx_job_id | int }}"
       register: compliance_persistence_query
       no_log: true
+      when: not (v3_persistence_active | bool)
+
+    - name: Persist V3 compliance run through transactional PostgreSQL API
+      community.postgresql.postgresql_query:
+        login_host: "{{ pg_host }}"
+        login_port: "{{ pg_port | int }}"
+        login_db: "{{ pg_database }}"
+        login_user: "{{ pg_username }}"
+        login_password: "{{ pg_password }}"
+        ssl_mode: "{{ pg_sslmode }}"
+        connect_params:
+          connect_timeout: 10
+        autocommit: true
+        query: |
+          SELECT
+            current_user AS database_user,
+            result.*
+          FROM compliance.ingest_v3_compliance_run(
+            %(compliance_run)s::jsonb,
+            %(persistence_context)s::jsonb,
+            %(workflow_job_id)s::bigint,
+            %(compliance_job_id)s::bigint,
+            %(aggregator_job_id)s::bigint,
+            %(source)s::text,
+            %(actor)s::text
+          ) AS result
+        named_args:
+          compliance_run: "{{ db_compliance_run | to_json }}"
+          persistence_context: "{{ v3_persistence_context | to_json }}"
+          workflow_job_id: "{{ workflow_job_id | int }}"
+          compliance_job_id: "{{ compliance_job_id | int }}"
+          aggregator_job_id: "{{ aggregator_job_id | int }}"
+          source: awx
+          actor: "awx-job-{{ awx_job_id | int }}"
+      register: v3_compliance_persistence_query
+      no_log: true
+      when: v3_persistence_active | bool
+
+    - name: Select V3 PostgreSQL persistence response
+      ansible.builtin.set_fact:
+        compliance_persistence_query: >-
+          {{
+            v3_compliance_persistence_query
+          }}
+      when: v3_persistence_active | bool
 
     - name: Validate PostgreSQL persistence response structure
       ansible.builtin.assert:
@@ -134,6 +342,10 @@
           - compliance_persistence_result.seen_again_count is defined
           - compliance_persistence_result.reopened_count is defined
           - compliance_persistence_result.duplicate_finding_count is defined
+          - >-
+            not (v3_persistence_active | bool)
+            or
+            compliance_persistence_result.activation_sources_inserted is defined
         fail_msg: PostgreSQL persistence result failed validation
 
     - name: Publish safe compliance persistence artifact

@@ -1,0 +1,241 @@
+---
+- name: Publish V3 compliance activation events to Kafka
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    kafka_bootstrap_servers_effective: >-
+      {{
+        kafka_bootstrap_servers
+        | default(
+            'network-automation-kafka-kafka-bootstrap.kafka.svc:9092',
+            true
+          )
+        | string
+        | trim
+      }}
+
+    kafka_client_id_effective: >-
+      {{
+        kafka_client_id
+        | default('network-compliance-v3-awx', true)
+        | string
+        | trim
+      }}
+
+    v3_publishable_decision: ACTIVATIONS_PREPARED
+
+    v3_no_publish_decisions:
+      - NO_ACTIVATIONS
+      - PERSISTENCE_DUPLICATE
+
+  tasks:
+    - name: Validate V3 activation event batch
+      ansible.builtin.assert:
+        that:
+          - v3_activation_event_batch is defined
+          - v3_activation_event_batch is mapping
+          - v3_activation_event_batch.decision is defined
+          - v3_activation_event_batch.decision in
+            ([v3_publishable_decision] + v3_no_publish_decisions)
+          - v3_activation_event_batch.activation_count is defined
+          - v3_activation_event_batch.events is defined
+          - v3_activation_event_batch.events is sequence
+          - v3_activation_event_batch.events is not string
+          - kafka_bootstrap_servers_effective | length > 0
+          - kafka_client_id_effective | length > 0
+        fail_msg: V3 activation event batch is invalid.
+
+    - name: Validate publishable activation batch invariants
+      ansible.builtin.assert:
+        that:
+          - v3_activation_event_batch.activation_count | int > 0
+          - >
+            (v3_activation_event_batch.activation_count | int)
+            ==
+            (v3_activation_event_batch.events | length)
+        fail_msg: >
+          ACTIVATIONS_PREPARED requires one or more matching
+          canonical activation events.
+      when:
+        - >
+          v3_activation_event_batch.decision
+          == v3_publishable_decision
+
+    - name: Validate no-publish activation batch invariants
+      ansible.builtin.assert:
+        that:
+          - v3_activation_event_batch.activation_count | int == 0
+          - v3_activation_event_batch.events | length == 0
+        fail_msg: >
+          A no-publish persistence decision must contain zero events.
+      when:
+        - >
+          v3_activation_event_batch.decision
+          in v3_no_publish_decisions
+
+    - name: Validate canonical V3 activation events
+      ansible.builtin.assert:
+        that:
+          - item is mapping
+          - item.schema_version | default('') == '3.0'
+          - >
+            item.event_type | default('')
+            == 'NETWORK_COMPLIANCE_FINDING_ACTIVATED'
+          - item.event_id is defined
+          - >
+            item.event_id | string
+            is match('^v3-compliance-event-[0-9a-f]{32}$')
+          - item.compliance_run_id is defined
+          - item.compliance_run_id | string | length > 0
+          - >
+            item.lifecycle_event_type | default('')
+            in ['DETECTED', 'REOPENED']
+          - item.finding is defined
+          - item.finding is mapping
+          - item.target is defined
+          - item.target is mapping
+        fail_msg: >
+          V3 activation batch contains a non-canonical event.
+      loop: "{{ v3_activation_event_batch.events }}"
+      loop_control:
+        label: "{{ item.event_id | default('invalid-event') }}"
+      when:
+        - >
+          v3_activation_event_batch.decision
+          == v3_publishable_decision
+
+    - name: Publish safe no-op Kafka artifact
+      ansible.builtin.set_stats:
+        data:
+          v3_kafka_publish:
+            decision: "{{ v3_activation_event_batch.decision }}"
+            attempted_count: 0
+            published_count: 0
+            event_ids: []
+            topic: network.compliance.events
+            publisher_job_id: "{{ awx_job_id | default(0) | int }}"
+        per_host: false
+      when:
+        - >
+          v3_activation_event_batch.decision
+          in v3_no_publish_decisions
+
+    - name: Publish V3 activation event batch
+      when:
+        - >
+          v3_activation_event_batch.decision
+          == v3_publishable_decision
+      block:
+        - name: Create private V3 publisher temporary directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: netauto-v3-kafka-
+          register: v3_publish_tempdir
+
+        - name: Write canonical activation events to private files
+          ansible.builtin.copy:
+            content: "{{ item | to_nice_json }}"
+            dest: >-
+              {{
+                v3_publish_tempdir.path
+                ~ '/event-'
+                ~ event_index
+                ~ '.json'
+              }}
+            mode: "0600"
+          loop: "{{ v3_activation_event_batch.events }}"
+          loop_control:
+            index_var: event_index
+            label: "{{ item.event_id }}"
+
+        - name: Publish canonical V3 activation events
+          ansible.builtin.command:
+            argv:
+              - python3
+              - >-
+                {{
+                  playbook_dir
+                  ~ '/../scripts/'
+                  ~ 'run_v3_network_compliance_kafka_publisher.py'
+                }}
+              - --input
+              - >-
+                {{
+                  v3_publish_tempdir.path
+                  ~ '/event-'
+                  ~ event_index
+                  ~ '.json'
+                }}
+              - --bootstrap-servers
+              - "{{ kafka_bootstrap_servers_effective }}"
+              - --client-id
+              - "{{ kafka_client_id_effective }}"
+          loop: "{{ v3_activation_event_batch.events }}"
+          loop_control:
+            index_var: event_index
+            label: "{{ item.event_id }}"
+          register: v3_publish_results
+          changed_when: false
+
+        - name: Validate V3 publisher receipts
+          ansible.builtin.assert:
+            that:
+              - item.rc | int == 0
+              - >
+                'v3_production_publisher_decision=EVENT_PUBLISHED'
+                in item.stdout
+              - >
+                ('published_event_id=' ~ item.item.event_id)
+                in item.stdout
+              - >
+                'published_topic=network.compliance.events'
+                in item.stdout
+              - >
+                'kafka_record_published=YES'
+                in item.stdout
+            fail_msg: >
+              Frozen V3 Kafka publisher did not return a valid receipt.
+          loop: "{{ v3_publish_results.results }}"
+          loop_control:
+            label: "{{ item.item.event_id }}"
+
+        - name: Publish safe V3 Kafka artifact
+          ansible.builtin.set_stats:
+            data:
+              v3_kafka_publish:
+                decision: EVENT_BATCH_PUBLISHED
+                attempted_count: >-
+                  {{
+                    v3_activation_event_batch.events
+                    | length
+                  }}
+                published_count: >-
+                  {{
+                    v3_publish_results.results
+                    | length
+                  }}
+                event_ids: >-
+                  {{
+                    v3_activation_event_batch.events
+                    | map(attribute='event_id')
+                    | list
+                  }}
+                topic: network.compliance.events
+                publisher_job_id: >-
+                  {{
+                    awx_job_id
+                    | default(0)
+                    | int
+                  }}
+            per_host: false
+
+      always:
+        - name: Remove V3 publisher temporary directory
+          ansible.builtin.file:
+            path: "{{ v3_publish_tempdir.path }}"
+            state: absent
+          when:
+            - v3_publish_tempdir is defined
+            - v3_publish_tempdir.path is defined

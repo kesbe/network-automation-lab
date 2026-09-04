@@ -100,9 +100,7 @@ def validate_transport_event(event):
     return event_id
 
 
-def serialize_event(event):
-    validate_transport_event(event)
-
+def _serialize_event(event):
     return json.dumps(
         event,
         sort_keys=True,
@@ -111,22 +109,49 @@ def serialize_event(event):
     ).encode("utf-8")
 
 
+def serialize_event(event):
+    validate_transport_event(event)
+
+    return _serialize_event(event)
+
+
 def _default_producer_factory(config):
     from confluent_kafka import Producer
 
     return Producer(config)
 
 
-def publish_event(
+def publish_validated_event(
     event,
     bootstrap_servers,
     topic,
     client_id,
     *,
+    validator,
     producer_factory=None,
     flush_timeout=10.0,
 ):
-    event_id=validate_transport_event(event)
+    if not callable(validator):
+        raise ValueError(
+            "validator must be callable"
+        )
+
+    validator(event)
+
+    if not isinstance(event, dict):
+        raise ValueError(
+            "event must be an object"
+        )
+
+    event_id=event.get("event_id")
+
+    if (
+        not isinstance(event_id, str)
+        or not event_id
+    ):
+        raise ValueError(
+            "event.event_id must be non-empty"
+        )
 
     if (
         not isinstance(topic, str)
@@ -175,7 +200,7 @@ def publish_event(
     producer.produce(
         topic=topic,
         key=event_id.encode("utf-8"),
-        value=serialize_event(event),
+        value=_serialize_event(event),
         on_delivery=on_delivery,
     )
 
@@ -213,3 +238,23 @@ def publish_event(
         "offset":
             delivery["offset"],
     }
+
+
+def publish_event(
+    event,
+    bootstrap_servers,
+    topic,
+    client_id,
+    *,
+    producer_factory=None,
+    flush_timeout=10.0,
+):
+    return publish_validated_event(
+        event,
+        bootstrap_servers,
+        topic,
+        client_id,
+        validator=validate_transport_event,
+        producer_factory=producer_factory,
+        flush_timeout=flush_timeout,
+    )

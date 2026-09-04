@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:network-automation-lab:network-compliance-finding-event-v3",
+  "title": "Network Compliance Finding Activation Event V3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "compliance_run_id",
+    "lifecycle_event_type",
+    "activated_at",
+    "finding",
+    "target"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "3.0"
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^v3-compliance-event-[0-9a-f]{32}$"
+    },
+    "event_type": {
+      "const": "NETWORK_COMPLIANCE_FINDING_ACTIVATED"
+    },
+    "compliance_run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lifecycle_event_type": {
+      "enum": [
+        "DETECTED",
+        "REOPENED"
+      ]
+    },
+    "activated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finding": {
+      "$ref": "#/$defs/finding"
+    },
+    "target": {
+      "$ref": "#/$defs/target"
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "finding_id",
+        "device",
+        "vendor",
+        "platform",
+        "control",
+        "severity",
+        "status",
+        "remediable",
+        "remediation_policy",
+        "ticket_required"
+      ],
+      "properties": {
+        "finding_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "device": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "control": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "NON_COMPLIANT"
+        },
+        "remediable": {
+          "type": "boolean"
+        },
+        "remediation_policy": {
+          "enum": [
+            "auto",
+            "approval_required",
+            "manual",
+            "observe_only",
+            "blocked"
+          ]
+        },
+        "ticket_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "remediation_policy": {
+                "const": "approval_required"
+              }
+            },
+            "required": [
+              "remediation_policy"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ticket_required": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "remediable": {
+                "const": false
+              }
+            },
+            "required": [
+              "remediable"
+            ]
+          },
+          "then": {
+            "properties": {
+              "remediation_policy": {
+                "enum": [
+                  "manual",
+                  "observe_only",
+                  "blocked"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "platform",
+        "vendor",
+        "tags"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "site": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "target_id",
+        "selector",
+        "devices",
+        "device_names",
+        "device_count"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "3.0"
+        },
+        "target_id": {
+          "type": "string",
+          "pattern": "^target-.+"
+        },
+        "selector": {
+          "type": "object"
+        },
+        "devices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/device"
+          }
+        },
+        "device_names": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "device_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
