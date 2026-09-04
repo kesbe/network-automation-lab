@@ -487,7 +487,7 @@ echo "create_database_gate=PASS"
 # ------------------------------------------------------------------
 
 echo
-echo "===== APPLY V3 MIGRATIONS 001 -> 014 ====="
+echo "===== APPLY V3 MIGRATIONS 001 -> 015 ====="
 
 MIGRATION_FILES=(
     "001_compliance_schema.sql"
@@ -504,6 +504,7 @@ MIGRATION_FILES=(
     "012_v3_transactional_run_ingestion.sql"
     "013_v3_activation_source_reader.sql"
     "014_v3_activation_sources_for_run_reader.sql"
+    "015_v3_dedicated_reader_role.sql"
 )
 
 APPLIED=0
@@ -592,8 +593,8 @@ done
 echo
 echo "migrations_applied=${APPLIED}"
 
-if [[ "${APPLIED}" -ne 14 ]]; then
-    fail "expected 14 migrations"
+if [[ "${APPLIED}" -ne 15 ]]; then
+    fail "expected 15 migrations"
 fi
 
 echo "migration_count_gate=PASS"
