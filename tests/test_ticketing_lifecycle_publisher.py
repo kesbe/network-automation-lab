@@ -51,14 +51,26 @@ class FakeRepository:
         self,
         topic,
         limit,
+        run_id=None,
     ):
-        self.calls.append(
-            (
-                "read",
-                topic,
-                limit,
+        if run_id is None:
+            self.calls.append(
+                (
+                    "read",
+                    topic,
+                    limit,
+                )
             )
-        )
+
+        else:
+            self.calls.append(
+                (
+                    "read",
+                    topic,
+                    limit,
+                    run_id,
+                )
+            )
 
         return list(self.rows)
 
@@ -371,6 +383,49 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(
             result["completed"],
             2,
+        )
+
+    def test_run_once_default_uses_unscoped_reader(self):
+        repo = FakeRepository()
+
+        LifecyclePublisher(
+            config(),
+            repo,
+            FakeTransport(),
+        ).run_once()
+
+        self.assertEqual(
+            repo.calls,
+            [
+                (
+                    "read",
+                    "network.compliance.lifecycle.events",
+                    100,
+                ),
+            ],
+        )
+
+    def test_run_once_passes_exact_run_scope(self):
+        repo = FakeRepository()
+
+        LifecyclePublisher(
+            config(),
+            repo,
+            FakeTransport(),
+        ).run_once(
+            run_id="controlled-run-123",
+        )
+
+        self.assertEqual(
+            repo.calls,
+            [
+                (
+                    "read",
+                    "network.compliance.lifecycle.events",
+                    100,
+                    "controlled-run-123",
+                ),
+            ],
         )
 
 

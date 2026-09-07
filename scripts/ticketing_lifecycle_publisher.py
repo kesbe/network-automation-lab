@@ -105,11 +105,22 @@ class LifecyclePublicationRepository:
         self,
         topic: str,
         limit: int,
+        run_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        if run_id is None:
+            return self.database.fetch_rows(
+                "read_unpublished_ticket_lifecycle_events",
+                (
+                    topic,
+                    limit,
+                ),
+            )
+
         return self.database.fetch_rows(
-            "read_unpublished_ticket_lifecycle_events",
+            "read_unpublished_ticket_lifecycle_events_for_run",
             (
                 topic,
+                run_id,
                 limit,
             ),
         )
@@ -307,7 +318,10 @@ class LifecyclePublisher:
 
         return "COMPLETED"
 
-    def run_once(self) -> dict[str, int]:
+    def run_once(
+        self,
+        run_id: Optional[str] = None,
+    ) -> dict[str, int]:
         counters = {
             "read": 0,
             "completed": 0,
@@ -319,6 +333,7 @@ class LifecyclePublisher:
         rows = self.repository.read_unpublished(
             self.config.topic,
             self.config.batch_limit,
+            run_id,
         )
 
         counters["read"] = len(rows)
@@ -385,21 +400,38 @@ def main() -> int:
 
     config = PublisherConfig.from_environment()
 
+    publish_run_id = os.environ.get(
+        "TICKETING_PUBLISH_RUN_ID"
+    )
+
+    if publish_run_id is not None:
+        publish_run_id = require_value(
+            os.environ,
+            "TICKETING_PUBLISH_RUN_ID",
+        )
+
     result = build_runtime(
         config
-    ).run_once()
+    ).run_once(
+        run_id=publish_run_id,
+    )
 
     print(
         "publisher_result="
         + ",".join(
             f"{key}:{value}"
-            for key, value in sorted(
+            for key, value
+            in sorted(
                 result.items()
             )
         )
     )
 
-    return 0 if result["failed"] == 0 else 1
+    return (
+        0
+        if result["failed"] == 0
+        else 1
+    )
 
 
 if __name__ == "__main__":

@@ -369,5 +369,110 @@ class TicketingLifecycleTransportMigrationTests(
             )
 
 
+class RunScopedLifecycleReaderMigrationTests(
+    unittest.TestCase
+):
+    @classmethod
+    def setUpClass(cls):
+        from pathlib import Path
+
+        cls.sql = (
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            / "db"
+            / "migrations"
+            / "017_ticketing_lifecycle_run_scoping.sql"
+        ).read_text()
+
+    def test_run_scoped_reader_exists(self):
+        self.assertIn(
+            "CREATE FUNCTION "
+            "compliance."
+            "read_unpublished_ticket_lifecycle_events_for_run",
+            self.sql,
+        )
+
+        self.assertIn(
+            "p_run_id TEXT",
+            self.sql,
+        )
+
+    def test_run_filter_precedes_order_and_limit(self):
+        filter_position = self.sql.find(
+            "fe.run_id = p_run_id"
+        )
+
+        order_position = self.sql.find(
+            "ORDER BY fe.event_id"
+        )
+
+        limit_position = self.sql.find(
+            "LIMIT p_limit"
+        )
+
+        self.assertGreaterEqual(
+            filter_position,
+            0,
+        )
+
+        self.assertGreater(
+            order_position,
+            filter_position,
+        )
+
+        self.assertGreater(
+            limit_position,
+            order_position,
+        )
+
+    def test_run_scoped_reader_security_boundary(self):
+        self.assertIn(
+            "SECURITY DEFINER",
+            self.sql,
+        )
+
+        self.assertIn(
+            "SET search_path = pg_catalog, compliance",
+            self.sql,
+        )
+
+        self.assertIn(
+            "OWNER TO compliance_api_owner",
+            self.sql,
+        )
+
+        self.assertIn(
+            "FROM PUBLIC",
+            self.sql,
+        )
+
+        self.assertIn(
+            "TO compliance_lifecycle_publisher",
+            self.sql,
+        )
+
+    def test_existing_reader_not_replaced(self):
+        self.assertNotIn(
+            "CREATE OR REPLACE FUNCTION "
+            "compliance."
+            "read_unpublished_ticket_lifecycle_events(",
+            self.sql,
+        )
+
+    def test_run_scoping_migration_transactional(self):
+        self.assertTrue(
+            self.sql.lstrip().startswith(
+                "BEGIN;"
+            )
+        )
+
+        self.assertTrue(
+            self.sql.rstrip().endswith(
+                "COMMIT;"
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

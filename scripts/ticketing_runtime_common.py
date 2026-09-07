@@ -31,6 +31,7 @@ ALLOWED_LIFECYCLE_EVENTS = frozenset(
 ALLOWED_DATABASE_FUNCTIONS = frozenset(
     {
         "read_unpublished_ticket_lifecycle_events",
+        "read_unpublished_ticket_lifecycle_events_for_run",
         "claim_lifecycle_event_publication",
         "complete_lifecycle_event_publication",
         "fail_lifecycle_event_publication",
