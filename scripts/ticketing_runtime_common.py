@@ -352,9 +352,11 @@ class SecurityDefinerDatabaseClient:
         self,
         config: DatabaseConfig,
         connect_factory: Optional[Callable[..., Any]] = None,
+        json_factory: Optional[Callable[[Any], Any]] = None,
     ) -> None:
         self.config = config
         self._connect_factory = connect_factory
+        self._json_factory = json_factory
 
     def _connect(self) -> Any:
         factory = self._connect_factory
@@ -380,6 +382,32 @@ class SecurityDefinerDatabaseClient:
             )
 
         return function
+
+    def _adapt_parameters(
+        self,
+        parameters: Sequence[Any],
+    ) -> tuple[Any, ...]:
+        from collections.abc import Mapping
+
+        if not any(
+            isinstance(value, Mapping)
+            for value in parameters
+        ):
+            return tuple(parameters)
+
+        json_factory = self._json_factory
+
+        if json_factory is None:
+            from psycopg2.extras import Json
+
+            json_factory = Json
+
+        return tuple(
+            json_factory(dict(value))
+            if isinstance(value, Mapping)
+            else value
+            for value in parameters
+        )
 
     def fetch_rows(
         self,
@@ -408,7 +436,9 @@ class SecurityDefinerDatabaseClient:
             try:
                 cursor.execute(
                     sql,
-                    tuple(parameters),
+                    self._adapt_parameters(
+                        parameters
+                    ),
                 )
 
                 description = cursor.description or ()
@@ -464,7 +494,9 @@ class SecurityDefinerDatabaseClient:
             try:
                 cursor.execute(
                     sql,
-                    tuple(parameters),
+                    self._adapt_parameters(
+                        parameters
+                    ),
                 )
 
                 row = cursor.fetchone()
