@@ -17,6 +17,11 @@ COPY scripts/ticketing_runtime_common.py /opt/network-compliance-ticketing/scrip
 COPY scripts/ticketing_lifecycle_publisher.py /opt/network-compliance-ticketing/scripts/ticketing_lifecycle_publisher.py
 COPY scripts/zammad_ticketing_adapter.py /opt/network-compliance-ticketing/scripts/zammad_ticketing_adapter.py
 
+RUN chmod 0644 \
+      /opt/network-compliance-ticketing/scripts/ticketing_runtime_common.py \
+      /opt/network-compliance-ticketing/scripts/ticketing_lifecycle_publisher.py \
+      /opt/network-compliance-ticketing/scripts/zammad_ticketing_adapter.py
+
 WORKDIR /opt/network-compliance-ticketing
 
 ENV PYTHONPATH=/opt/network-compliance-ticketing
