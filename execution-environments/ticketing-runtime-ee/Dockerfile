@@ -14,13 +14,17 @@ RUN python3 -m pip install \
 RUN mkdir -p /opt/network-compliance-ticketing/scripts
 
 COPY scripts/ticketing_runtime_common.py /opt/network-compliance-ticketing/scripts/ticketing_runtime_common.py
+COPY scripts/ticketing_provider.py /opt/network-compliance-ticketing/scripts/ticketing_provider.py
 COPY scripts/ticketing_lifecycle_publisher.py /opt/network-compliance-ticketing/scripts/ticketing_lifecycle_publisher.py
 COPY scripts/zammad_ticketing_adapter.py /opt/network-compliance-ticketing/scripts/zammad_ticketing_adapter.py
+COPY scripts/servicenow_ticketing_adapter.py /opt/network-compliance-ticketing/scripts/servicenow_ticketing_adapter.py
 
 RUN chmod 0644 \
       /opt/network-compliance-ticketing/scripts/ticketing_runtime_common.py \
+      /opt/network-compliance-ticketing/scripts/ticketing_provider.py \
       /opt/network-compliance-ticketing/scripts/ticketing_lifecycle_publisher.py \
-      /opt/network-compliance-ticketing/scripts/zammad_ticketing_adapter.py
+      /opt/network-compliance-ticketing/scripts/zammad_ticketing_adapter.py \
+      /opt/network-compliance-ticketing/scripts/servicenow_ticketing_adapter.py
 
 WORKDIR /opt/network-compliance-ticketing
 
@@ -28,10 +32,14 @@ ENV PYTHONPATH=/opt/network-compliance-ticketing
 
 RUN python3 -m py_compile \
       scripts/ticketing_runtime_common.py \
+      scripts/ticketing_provider.py \
       scripts/ticketing_lifecycle_publisher.py \
       scripts/zammad_ticketing_adapter.py \
+      scripts/servicenow_ticketing_adapter.py \
     && python3 -c "import scripts.ticketing_runtime_common" \
+    && python3 -c "import scripts.ticketing_provider" \
     && python3 -c "import scripts.ticketing_lifecycle_publisher" \
-    && python3 -c "import scripts.zammad_ticketing_adapter"
+    && python3 -c "import scripts.zammad_ticketing_adapter" \
+    && python3 -c "import scripts.servicenow_ticketing_adapter"
 
 USER 1000
