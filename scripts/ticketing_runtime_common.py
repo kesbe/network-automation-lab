@@ -30,17 +30,23 @@ ALLOWED_LIFECYCLE_EVENTS = frozenset(
 
 ALLOWED_DATABASE_FUNCTIONS = frozenset(
     {
+        "claim_lifecycle_event_publication",
+        "claim_servicenow_ticket_event_receipt",
+        "claim_zammad_ticket_event_receipt",
+        "complete_lifecycle_event_publication",
+        "complete_servicenow_ticket_event_receipt",
+        "complete_zammad_ticket_event_receipt",
+        "fail_lifecycle_event_publication",
+        "fail_servicenow_ticket_event_receipt",
+        "fail_zammad_ticket_event_receipt",
+        "read_servicenow_ticket_record",
         "read_unpublished_ticket_lifecycle_events",
         "read_unpublished_ticket_lifecycle_events_for_run",
-        "claim_lifecycle_event_publication",
-        "complete_lifecycle_event_publication",
-        "fail_lifecycle_event_publication",
-        "claim_zammad_ticket_event_receipt",
-        "complete_zammad_ticket_event_receipt",
-        "fail_zammad_ticket_event_receipt",
         "read_zammad_ticket_record",
-        "upsert_zammad_ticket_record",
+        "update_servicenow_ticket_record",
         "update_zammad_ticket_record",
+        "upsert_servicenow_ticket_record",
+        "upsert_zammad_ticket_record",
     }
 )
 
