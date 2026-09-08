@@ -9,8 +9,11 @@ Phase-2 constraints:
 * ServiceNow state values remain instance configuration
 """
 
+import argparse
 import hashlib
 import json
+import os
+import socket
 import urllib.parse
 import urllib.request
 
@@ -18,7 +21,17 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Protocol
 
 from scripts.ticketing_provider import RemoteTicket
-from scripts.ticketing_runtime_common import RuntimeContractError
+from scripts.ticketing_runtime_common import (
+    DatabaseConfig,
+    RuntimeConfigurationError,
+    RuntimeContractError,
+    SecurityDefinerDatabaseClient,
+    normalize_event_row,
+    redact_text,
+    require_claim_disposition,
+    require_positive_int,
+    require_value,
+)
 
 
 INCIDENT_TABLE = "incident"
@@ -603,3 +616,988 @@ class ServiceNowIncidentProvider:
                     ),
             },
         )
+# ============================================================================
+# ServiceNow runtime orchestration
+# ============================================================================
+
+
+DEFAULT_TOPIC = "network.compliance.lifecycle.events"
+
+DEFAULT_SERVICENOW_GROUP = (
+    "servicenow-network-compliance-production-v1"
+)
+
+
+@dataclass(frozen=True)
+class ServiceNowAdapterConfig:
+    database: DatabaseConfig
+    bootstrap_servers: str
+    topic: str
+    consumer_group: str
+    instance_id: str
+    lease_seconds: int
+    poll_seconds: int
+    servicenow: ServiceNowConfig
+    authorization: str
+
+    @classmethod
+    def from_environment(
+        cls,
+        env: Optional[Mapping[str, str]] = None,
+    ) -> "ServiceNowAdapterConfig":
+
+        source = (
+            os.environ
+            if env is None
+            else env
+        )
+
+        topic = require_value(
+            source,
+            "TICKETING_LIFECYCLE_TOPIC",
+            DEFAULT_TOPIC,
+        )
+
+        group = require_value(
+            source,
+            "TICKETING_SERVICENOW_CONSUMER_GROUP",
+            DEFAULT_SERVICENOW_GROUP,
+        )
+
+        if topic != DEFAULT_TOPIC:
+            raise RuntimeConfigurationError(
+                "TICKETING_LIFECYCLE_TOPIC must be "
+                + DEFAULT_TOPIC
+            )
+
+        if group != DEFAULT_SERVICENOW_GROUP:
+            raise RuntimeConfigurationError(
+                "TICKETING_SERVICENOW_CONSUMER_GROUP "
+                "must be "
+                + DEFAULT_SERVICENOW_GROUP
+            )
+
+        def optional_value(
+            name: str,
+        ) -> Optional[str]:
+
+            value = source.get(name)
+
+            if value is None:
+                return None
+
+            if not isinstance(
+                value,
+                str,
+            ):
+                raise RuntimeConfigurationError(
+                    name
+                    + " must be a string"
+                )
+
+            value = value.strip()
+
+            return value or None
+
+        provider_config = ServiceNowConfig(
+            base_url=require_value(
+                source,
+                "TICKETING_SERVICENOW_BASE_URL",
+            ).rstrip("/"),
+
+            active_state=require_value(
+                source,
+                "TICKETING_SERVICENOW_ACTIVE_STATE",
+            ),
+
+            resolved_state=require_value(
+                source,
+                "TICKETING_SERVICENOW_RESOLVED_STATE",
+            ),
+
+            assignment_group=optional_value(
+                "TICKETING_SERVICENOW_ASSIGNMENT_GROUP"
+            ),
+
+            resolution_code=optional_value(
+                "TICKETING_SERVICENOW_RESOLUTION_CODE"
+            ),
+        )
+
+        return cls(
+            database=DatabaseConfig.from_environment(
+                source
+            ),
+
+            bootstrap_servers=require_value(
+                source,
+                "TICKETING_KAFKA_BOOTSTRAP_SERVERS",
+            ),
+
+            topic=topic,
+
+            consumer_group=group,
+
+            instance_id=require_value(
+                source,
+                "TICKETING_ADAPTER_INSTANCE_ID",
+                socket.gethostname(),
+            ),
+
+            lease_seconds=require_positive_int(
+                source,
+                "TICKETING_RECEIPT_LEASE_SECONDS",
+                default=300,
+            ),
+
+            poll_seconds=require_positive_int(
+                source,
+                "TICKETING_CONSUMER_POLL_SECONDS",
+                default=5,
+            ),
+
+            servicenow=provider_config,
+
+            authorization=require_value(
+                source,
+                "TICKETING_SERVICENOW_AUTHORIZATION",
+            ),
+        )
+
+
+class ServiceNowReceiptRepository:
+    def __init__(
+        self,
+        database: SecurityDefinerDatabaseClient,
+    ) -> None:
+        self.database = database
+
+    def claim(
+        self,
+        source_event_id: int,
+        instance_id: str,
+        lease_seconds: int,
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "claim_servicenow_ticket_event_receipt",
+            (
+                source_event_id,
+                instance_id,
+                lease_seconds,
+                {},
+            ),
+        )
+
+    def complete(
+        self,
+        source_event_id: int,
+        instance_id: str,
+        ticket_record_id: Optional[str],
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "complete_servicenow_ticket_event_receipt",
+            (
+                source_event_id,
+                instance_id,
+                ticket_record_id,
+                {},
+            ),
+        )
+
+    def fail(
+        self,
+        source_event_id: int,
+        instance_id: str,
+        error: str,
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "fail_servicenow_ticket_event_receipt",
+            (
+                source_event_id,
+                instance_id,
+                error,
+                {},
+            ),
+        )
+
+    def read_ticket(
+        self,
+        finding_id: str,
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "read_servicenow_ticket_record",
+            (
+                finding_id,
+            ),
+        )
+
+    def upsert_ticket(
+        self,
+        ticket_record_id: str,
+        finding_id: str,
+        external_ticket_id: Optional[str],
+        external_ticket_number: Optional[str],
+        ticket_state: str,
+        details: Optional[
+            Mapping[str, Any]
+        ] = None,
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "upsert_servicenow_ticket_record",
+            (
+                ticket_record_id,
+                finding_id,
+                external_ticket_id,
+                external_ticket_number,
+                ticket_state,
+                dict(details or {}),
+            ),
+        )
+
+    def update_ticket(
+        self,
+        ticket_record_id: str,
+        expected_state: str,
+        new_state: str,
+        external_ticket_id: Optional[str],
+        external_ticket_number: Optional[str],
+        last_error: Optional[str] = None,
+        details: Optional[
+            Mapping[str, Any]
+        ] = None,
+    ) -> Any:
+
+        return self.database.fetch_json(
+            "update_servicenow_ticket_record",
+            (
+                ticket_record_id,
+                expected_state,
+                new_state,
+                external_ticket_id,
+                external_ticket_number,
+                last_error,
+                dict(details or {}),
+            ),
+        )
+
+
+def _record_field(
+    value: Any,
+    *names: str,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+        for name in names:
+            if name in value:
+                return value[name]
+
+    for name in names:
+        if hasattr(
+            value,
+            name,
+        ):
+            return getattr(
+                value,
+                name,
+            )
+
+    return None
+
+
+def ticket_record_id(
+    record: Any,
+) -> Optional[str]:
+
+    value = _record_field(
+        record,
+        "ticket_record_id",
+        "id",
+    )
+
+    return (
+        str(value)
+        if value not in (
+            None,
+            "",
+        )
+        else None
+    )
+
+
+def external_ticket_id(
+    record: Any,
+) -> Optional[str]:
+
+    value = _record_field(
+        record,
+        "external_ticket_id",
+        "external_id",
+    )
+
+    return (
+        str(value)
+        if value not in (
+            None,
+            "",
+        )
+        else None
+    )
+
+
+def external_ticket_number(
+    record: Any,
+) -> Optional[str]:
+
+    value = _record_field(
+        record,
+        "external_ticket_number",
+        "external_number",
+        "number",
+    )
+
+    return (
+        str(value)
+        if value not in (
+            None,
+            "",
+        )
+        else None
+    )
+
+
+def ticket_state(
+    record: Any,
+) -> Optional[str]:
+
+    value = _record_field(
+        record,
+        "ticket_state",
+        "state",
+    )
+
+    return (
+        str(value).upper()
+        if value not in (
+            None,
+            "",
+        )
+        else None
+    )
+
+
+class ServiceNowTicketingAdapter:
+    def __init__(
+        self,
+        config: ServiceNowAdapterConfig,
+        repository: ServiceNowReceiptRepository,
+        servicenow: ServiceNowIncidentProvider,
+    ) -> None:
+
+        self.config = config
+        self.repository = repository
+        self.servicenow = servicenow
+
+    def _ensure_detected_ticket(
+        self,
+        event: Mapping[str, Any],
+    ) -> str:
+
+        existing = (
+            self.repository.read_ticket(
+                event["finding_id"]
+            )
+        )
+
+        existing_id = external_ticket_id(
+            existing
+        )
+
+        existing_record_id = (
+            ticket_record_id(
+                existing
+            )
+        )
+
+        existing_state = ticket_state(
+            existing
+        )
+
+        if (
+            existing_id
+            and existing_record_id
+            and existing_state
+            not in {
+                "CLOSED",
+                "RESOLVED",
+            }
+        ):
+            return existing_record_id
+
+        remote = (
+            self.servicenow.search_ticket(
+                event["finding_id"]
+            )
+        )
+
+        if remote is None:
+            remote = (
+                self.servicenow.create_ticket(
+                    event
+                )
+            )
+
+        if not remote.external_ticket_id:
+            raise RuntimeContractError(
+                "ServiceNow incident "
+                "has no sys_id"
+            )
+
+        record_id = (
+            existing_record_id
+            or deterministic_ticket_record_id(
+                event["finding_id"]
+            )
+        )
+
+        self.repository.upsert_ticket(
+            record_id,
+            event["finding_id"],
+            remote.external_ticket_id,
+            remote.external_ticket_number,
+            "OPEN",
+            {
+                "source_event_id":
+                    event["source_event_id"],
+
+                "lifecycle_event_type":
+                    "DETECTED",
+            },
+        )
+
+        return record_id
+
+    def _update_existing_ticket(
+        self,
+        event: Mapping[str, Any],
+        new_local_state: str,
+    ) -> str:
+
+        if new_local_state not in {
+            "OPEN",
+            "CLOSED",
+        }:
+            raise RuntimeContractError(
+                "unsupported local ticket state"
+            )
+
+        record = (
+            self.repository.read_ticket(
+                event["finding_id"]
+            )
+        )
+
+        record_id = ticket_record_id(
+            record
+        )
+
+        remote_id = external_ticket_id(
+            record
+        )
+
+        current_state = ticket_state(
+            record
+        )
+
+        if (
+            record_id
+            and remote_id
+            and current_state
+                == new_local_state
+        ):
+            return record_id
+
+        recovery_state = (
+            "CLOSED"
+            if new_local_state == "OPEN"
+            else "OPEN"
+        )
+
+        if not record_id or not remote_id:
+
+            remote = (
+                self.servicenow.search_ticket(
+                    event["finding_id"]
+                )
+            )
+
+            if remote is None:
+                raise RuntimeContractError(
+                    "existing ServiceNow incident "
+                    "is required for lifecycle "
+                    "state update"
+                )
+
+            record_id = (
+                record_id
+                or deterministic_ticket_record_id(
+                    event["finding_id"]
+                )
+            )
+
+            remote_id = (
+                remote.external_ticket_id
+            )
+
+            self.repository.upsert_ticket(
+                record_id,
+                event["finding_id"],
+                remote_id,
+                remote.external_ticket_number,
+                current_state
+                or recovery_state,
+                {
+                    "recovered_by_search":
+                        True,
+                },
+            )
+
+            record = (
+                self.repository.read_ticket(
+                    event["finding_id"]
+                )
+            )
+
+            current_state = (
+                ticket_state(
+                    record
+                )
+                or current_state
+                or recovery_state
+            )
+
+        if new_local_state == "CLOSED":
+
+            remote_result = (
+                self.servicenow.resolve_ticket(
+                    remote_id,
+                    event,
+                )
+            )
+
+        else:
+
+            remote_result = (
+                self.servicenow.reopen_ticket(
+                    remote_id,
+                    event,
+                )
+            )
+
+        self.repository.update_ticket(
+            record_id,
+            current_state
+            or recovery_state,
+            new_local_state,
+            remote_result.external_ticket_id,
+            (
+                remote_result
+                    .external_ticket_number
+                or external_ticket_number(
+                    record
+                )
+            ),
+            None,
+            {
+                "source_event_id":
+                    event["source_event_id"],
+
+                "lifecycle_event_type":
+                    event[
+                        "lifecycle_event_type"
+                    ],
+            },
+        )
+
+        return record_id
+
+    def process_event(
+        self,
+        raw_event: Mapping[str, Any],
+    ) -> str:
+
+        source_row = {
+            "source_event_id":
+                raw_event.get(
+                    "source_event_id"
+                ),
+
+            "source_finding_id":
+                raw_event.get(
+                    "finding_id"
+                ),
+
+            "run_id":
+                raw_event.get(
+                    "run_id"
+                ),
+
+            "lifecycle_event_type":
+                raw_event.get(
+                    "lifecycle_event_type"
+                ),
+
+            "event_time":
+                raw_event.get(
+                    "event_time"
+                ),
+
+            "old_status":
+                raw_event.get(
+                    "old_status"
+                ),
+
+            "new_status":
+                raw_event.get(
+                    "new_status"
+                ),
+
+            "event_details":
+                raw_event.get(
+                    "event_details",
+                    {},
+                ),
+
+            "finding_snapshot":
+                raw_event.get(
+                    "finding_snapshot",
+                    {},
+                ),
+        }
+
+        event = normalize_event_row(
+            source_row
+        )
+
+        claim = self.repository.claim(
+            event["source_event_id"],
+            self.config.instance_id,
+            self.config.lease_seconds,
+        )
+
+        disposition = (
+            require_claim_disposition(
+                claim
+            )
+        )
+
+        if disposition == "COMPLETED":
+            return "ALREADY_COMPLETED"
+
+        if disposition == "BUSY":
+            return "BUSY"
+
+        record_id: Optional[str] = None
+
+        try:
+            event_type = event[
+                "lifecycle_event_type"
+            ]
+
+            if event_type == "DETECTED":
+
+                record_id = (
+                    self._ensure_detected_ticket(
+                        event
+                    )
+                )
+
+            elif event_type == "SEEN_AGAIN":
+
+                existing = (
+                    self.repository.read_ticket(
+                        event["finding_id"]
+                    )
+                )
+
+                record_id = ticket_record_id(
+                    existing
+                )
+
+            elif event_type == "RESOLVED":
+
+                record_id = (
+                    self._update_existing_ticket(
+                        event,
+                        "CLOSED",
+                    )
+                )
+
+            elif event_type == "REOPENED":
+
+                record_id = (
+                    self._update_existing_ticket(
+                        event,
+                        "OPEN",
+                    )
+                )
+
+            else:
+                raise RuntimeContractError(
+                    "unsupported lifecycle event"
+                )
+
+            self.repository.complete(
+                event["source_event_id"],
+                self.config.instance_id,
+                record_id,
+            )
+
+            return "COMPLETED"
+
+        except Exception as exc:
+
+            safe_error = redact_text(
+                exc,
+                (
+                    self.config
+                        .database
+                        .password,
+
+                    self.config
+                        .authorization,
+                ),
+            )
+
+            self.repository.fail(
+                event["source_event_id"],
+                self.config.instance_id,
+                safe_error,
+            )
+
+            raise
+
+
+class KafkaTicketConsumer:
+    def __init__(
+        self,
+        config: ServiceNowAdapterConfig,
+        adapter: ServiceNowTicketingAdapter,
+        consumer: Optional[Any] = None,
+    ) -> None:
+
+        self.config = config
+        self.adapter = adapter
+
+        if consumer is None:
+
+            from confluent_kafka import (
+                Consumer,
+            )
+
+            consumer = Consumer(
+                {
+                    "bootstrap.servers":
+                        config.bootstrap_servers,
+
+                    "group.id":
+                        config.consumer_group,
+
+                    "enable.auto.commit":
+                        False,
+
+                    "enable.auto.offset.store":
+                        False,
+
+                    "auto.offset.reset":
+                        "earliest",
+                }
+            )
+
+        self.consumer = consumer
+
+    def start(self) -> None:
+
+        self.consumer.subscribe(
+            [
+                self.config.topic,
+            ]
+        )
+
+    def process_message(
+        self,
+        message: Any,
+    ) -> str:
+
+        if message.error():
+            raise RuntimeError(
+                str(
+                    message.error()
+                )
+            )
+
+        payload = json.loads(
+            message.value().decode(
+                "utf-8"
+            )
+        )
+
+        result = (
+            self.adapter.process_event(
+                payload
+            )
+        )
+
+        if result in {
+            "COMPLETED",
+            "ALREADY_COMPLETED",
+        }:
+
+            self.consumer.commit(
+                message=message,
+                asynchronous=False,
+            )
+
+        return result
+
+    def poll_once(
+        self,
+    ) -> Optional[str]:
+
+        message = self.consumer.poll(
+            self.config.poll_seconds
+        )
+
+        if message is None:
+            return None
+
+        return self.process_message(
+            message
+        )
+
+    def close(self) -> None:
+
+        self.consumer.close()
+
+
+def build_runtime(
+    config: ServiceNowAdapterConfig,
+) -> KafkaTicketConsumer:
+
+    database = (
+        SecurityDefinerDatabaseClient(
+            config.database
+        )
+    )
+
+    repository = (
+        ServiceNowReceiptRepository(
+            database
+        )
+    )
+
+    servicenow = (
+        ServiceNowIncidentProvider(
+            config.servicenow,
+            {
+                "Authorization":
+                    config.authorization,
+            },
+        )
+    )
+
+    adapter = (
+        ServiceNowTicketingAdapter(
+            config,
+            repository,
+            servicenow,
+        )
+    )
+
+    return KafkaTicketConsumer(
+        config,
+        adapter,
+    )
+
+
+def main() -> int:
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--max-messages",
+        type=int,
+        default=0,
+        help=(
+            "0 means continue until interrupted; "
+            "positive values stop after that many polls"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    config = (
+        ServiceNowAdapterConfig
+        .from_environment()
+    )
+
+    runtime = build_runtime(
+        config
+    )
+
+    processed = 0
+
+    runtime.start()
+
+    try:
+
+        while (
+            args.max_messages <= 0
+            or processed
+                < args.max_messages
+        ):
+
+            result = runtime.poll_once()
+
+            if result is not None:
+                processed += 1
+
+    except KeyboardInterrupt:
+        pass
+
+    except Exception as exc:
+
+        print(
+            "adapter_error="
+            + redact_text(
+                exc,
+                (
+                    config
+                        .database
+                        .password,
+
+                    config
+                        .authorization,
+                ),
+            )
+        )
+
+        return 1
+
+    finally:
+        runtime.close()
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        main()
+    )
