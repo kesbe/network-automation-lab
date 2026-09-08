@@ -221,7 +221,7 @@ class ServiceNowOfflineDeploymentContractTests(
             value,
         )
 
-    def test_optional_pdi_values_are_not_guessed(self):
+    def test_pdi_values_follow_discovered_contract(self):
         value = text(CONFIGMAP)
 
         self.assertNotIn(
@@ -229,8 +229,8 @@ class ServiceNowOfflineDeploymentContractTests(
             value,
         )
 
-        self.assertNotIn(
-            "TICKETING_SERVICENOW_RESOLUTION_CODE",
+        self.assertIn(
+            'TICKETING_SERVICENOW_RESOLUTION_CODE: "Solution provided"',
             value,
         )
 
