@@ -30,6 +30,12 @@ VALID_RISKS = {
     "high",
 }
 
+
+VALID_TARGET_PROVIDERS = {
+    "servicenow",
+    "zammad",
+}
+
 REQUIRED_POLICY_FIELDS = {
     "name",
     "description",
@@ -130,6 +136,110 @@ for policy_id, policy in policies.items():
         fail(
             f"{policy_id}: ticket_required "
             f"must be true/false"
+        )
+
+    target_providers = policy.get(
+        "target_providers"
+    )
+
+    if ticket_required:
+
+        if (
+            not isinstance(
+                target_providers,
+                list,
+            )
+            or not target_providers
+        ):
+            fail(
+                f"{policy_id}: "
+                "target_providers must be "
+                "a non-empty array when "
+                "ticket_required=true"
+            )
+
+        normalized_targets = []
+
+        for provider in target_providers:
+
+            if (
+                not isinstance(
+                    provider,
+                    str,
+                )
+                or not provider.strip()
+            ):
+                fail(
+                    f"{policy_id}: "
+                    "target_providers members "
+                    "must be non-empty strings"
+                )
+
+            canonical = (
+                provider
+                .strip()
+                .lower()
+            )
+
+            if (
+                canonical
+                not in
+                VALID_TARGET_PROVIDERS
+            ):
+                fail(
+                    f"{policy_id}: unsupported "
+                    "target provider "
+                    f"{canonical!r}"
+                )
+
+            if provider != canonical:
+                fail(
+                    f"{policy_id}: target "
+                    f"provider {provider!r} "
+                    "is not canonical"
+                )
+
+            normalized_targets.append(
+                canonical
+            )
+
+        if (
+            len(
+                set(
+                    normalized_targets
+                )
+            )
+            != len(
+                normalized_targets
+            )
+        ):
+            fail(
+                f"{policy_id}: "
+                "target_providers contains "
+                "duplicates"
+            )
+
+        if (
+            normalized_targets
+            != sorted(
+                normalized_targets
+            )
+        ):
+            fail(
+                f"{policy_id}: "
+                "target_providers must use "
+                "lexicographic order"
+            )
+
+    elif (
+        "target_providers"
+        in policy
+    ):
+
+        fail(
+            f"{policy_id}: "
+            "target_providers must be absent "
+            "when ticket_required=false"
         )
 
     enabled = policy["enabled"]

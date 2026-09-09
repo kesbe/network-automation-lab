@@ -34,6 +34,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: true
@@ -78,6 +80,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: false
@@ -100,6 +104,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: false
@@ -122,6 +128,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: false
@@ -144,6 +152,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: false
@@ -166,6 +176,8 @@ compliance_policies:
     severity: critical
 
     ticket_required: true
+    target_providers:
+      - servicenow
 
     remediation:
       supported: false

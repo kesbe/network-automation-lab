@@ -108,6 +108,111 @@ def main():
                     f"finding missing required field {key}"
                 )
 
+        ticket_required = finding[
+            "ticket_required"
+        ]
+
+        if not isinstance(
+            ticket_required,
+            bool,
+        ):
+            fail(
+                "finding.ticket_required "
+                "must be boolean"
+            )
+
+        raw_target_providers = finding.get(
+            "target_providers"
+        )
+
+        if ticket_required:
+
+            if (
+                not isinstance(
+                    raw_target_providers,
+                    list,
+                )
+                or not raw_target_providers
+            ):
+                fail(
+                    "finding.target_providers "
+                    "must be a non-empty array "
+                    "when ticket_required=true"
+                )
+
+            normalized_targets = []
+
+            for provider in raw_target_providers:
+
+                if (
+                    not isinstance(
+                        provider,
+                        str,
+                    )
+                    or not provider.strip()
+                ):
+                    fail(
+                        "finding.target_providers "
+                        "members must be "
+                        "non-empty strings"
+                    )
+
+                canonical = (
+                    provider
+                    .strip()
+                    .lower()
+                )
+
+                if canonical not in {
+                    "servicenow",
+                    "zammad",
+                }:
+                    fail(
+                        "unsupported target provider: "
+                        + canonical
+                    )
+
+                normalized_targets.append(
+                    canonical
+                )
+
+            if (
+                len(
+                    set(
+                        normalized_targets
+                    )
+                )
+                != len(
+                    normalized_targets
+                )
+            ):
+                fail(
+                    "finding.target_providers "
+                    "must not contain duplicates"
+                )
+
+            if (
+                normalized_targets
+                != sorted(
+                    normalized_targets
+                )
+            ):
+                fail(
+                    "finding.target_providers "
+                    "must be canonical"
+                )
+
+        elif (
+            "target_providers"
+            in finding
+        ):
+
+            fail(
+                "finding.target_providers "
+                "must be absent when "
+                "ticket_required=false"
+            )
+
         finding_ids.append(
             finding["finding_id"]
         )

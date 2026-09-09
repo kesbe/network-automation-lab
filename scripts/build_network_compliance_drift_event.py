@@ -79,34 +79,124 @@ def map_finding(finding):
             "finding.ticket_required must be boolean"
         )
 
-    return {
-        "finding_id":
-            finding["finding_id"],
+    raw_target_providers = finding.get(
+        "target_providers"
+    )
 
-        "fingerprint":
-            finding["finding_fingerprint"],
+    if finding["ticket_required"]:
 
-        "device":
-            finding["device"],
+        if (
+            not isinstance(
+                raw_target_providers,
+                list,
+            )
+            or not raw_target_providers
+        ):
+            fail(
+                "finding.target_providers "
+                "must be a non-empty array "
+                "when ticket_required=true"
+            )
 
-        "policy_id":
-            finding["policy_id"],
+        target_providers = []
 
-        "severity":
-            finding["severity"],
+        for provider in raw_target_providers:
 
-        "ticket_required":
-            finding["ticket_required"],
+            if (
+                not isinstance(
+                    provider,
+                    str,
+                )
+                or not provider.strip()
+            ):
+                fail(
+                    "finding.target_providers "
+                    "members must be "
+                    "non-empty strings"
+                )
 
-        "remediation_mode":
-            mode,
+            canonical = (
+                provider
+                .strip()
+                .lower()
+            )
 
-        "observed":
-            finding["actual"],
+            if canonical not in {
+                "servicenow",
+                "zammad",
+            }:
+                fail(
+                    "unsupported target provider: "
+                    + canonical
+                )
 
-        "expected":
-            finding["expected"],
-    }
+            target_providers.append(
+                canonical
+            )
+
+        if (
+            len(
+                set(
+                    target_providers
+                )
+            )
+            != len(
+                target_providers
+            )
+        ):
+            fail(
+                "finding.target_providers "
+                "must not contain duplicates"
+            )
+
+        target_providers = sorted(
+            target_providers
+        )
+
+    elif (
+        "target_providers"
+        in finding
+    ):
+
+        fail(
+            "finding.target_providers "
+            "must be absent when "
+            "ticket_required=false"
+        )
+
+    result = {
+            "finding_id":
+                finding["finding_id"],
+
+            "fingerprint":
+                finding["finding_fingerprint"],
+
+            "device":
+                finding["device"],
+
+            "policy_id":
+                finding["policy_id"],
+
+            "severity":
+                finding["severity"],
+
+            "ticket_required":
+                finding["ticket_required"],
+
+            "remediation_mode":
+                mode,
+
+            "observed":
+                finding["actual"],
+
+            "expected":
+                finding["expected"],
+        }
+
+    if finding["ticket_required"]:
+        result["target_providers"] = target_providers
+
+    return result
 
 
 def build_event(job):
