@@ -854,6 +854,14 @@ class ZammadTicketingAdapter:
             source_row
         )
 
+        if (
+            event["finding_snapshot"].get(
+                "ticket_required"
+            ) is True
+            and "zammad" not in event["target_providers"]
+        ):
+            return "SKIPPED_NOT_TARGETED"
+
         claim = self.repository.claim(
             event["source_event_id"],
             self.config.instance_id,
@@ -1003,6 +1011,7 @@ class KafkaTicketConsumer:
         if result in {
             "COMPLETED",
             "ALREADY_COMPLETED",
+            "SKIPPED_NOT_TARGETED",
         }:
             self.consumer.commit(
                 message=message,

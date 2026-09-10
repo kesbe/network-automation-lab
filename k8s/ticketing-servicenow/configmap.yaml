@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: servicenow-ticketing-runtime-config
+  namespace: network-compliance-ticketing
+data:
+  TICKETING_DB_HOST: "postgresql.compliance-db.svc"
+  TICKETING_DB_PORT: "5432"
+  TICKETING_DB_NAME: "network_compliance"
+
+  TICKETING_KAFKA_BOOTSTRAP_SERVERS: "network-automation-kafka-kafka-bootstrap.kafka.svc:9092"
+  TICKETING_LIFECYCLE_TOPIC: "network.compliance.lifecycle.events"
+
+  TICKETING_SERVICENOW_CONSUMER_GROUP: "servicenow-network-compliance-production-v1"
+
+  TICKETING_RECEIPT_LEASE_SECONDS: "300"
+  TICKETING_CONSUMER_POLL_SECONDS: "5"
+
+  TICKETING_SERVICENOW_BASE_URL: "https://dev399022.service-now.com"
+  TICKETING_SERVICENOW_ACTIVE_STATE: "1"
+  TICKETING_SERVICENOW_RESOLVED_STATE: "6"
+  TICKETING_SERVICENOW_RESOLUTION_CODE: "Solution provided"

@@ -228,6 +228,22 @@ class RuntimeContractTests(unittest.TestCase):
                 combined,
             )
 
+    def test_publisher_run_scope_contract(self):
+        self.assertIn(
+            '"TICKETING_PUBLISH_RUN_ID"',
+            self.publisher,
+        )
+
+        self.assertIn(
+            '"read_unpublished_ticket_lifecycle_events_for_run"',
+            self.publisher,
+        )
+
+        self.assertIn(
+            '"read_unpublished_ticket_lifecycle_events_for_run"',
+            self.common,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

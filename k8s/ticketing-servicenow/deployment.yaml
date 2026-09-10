@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servicenow-ticketing-adapter
+  namespace: network-compliance-ticketing
+spec:
+  # Phase 5A offline safeguard.
+  #
+  # Do not increase until a later explicitly authorized phase has:
+  #   - built and reconciled the runtime image;
+  #   - created the real runtime Secret;
+  #   - validated the PDI-specific configuration;
+  #   - completed the migration-018 deployment prerequisite.
+  replicas: 0
+
+  selector:
+    matchLabels:
+      app: servicenow-ticketing-adapter
+
+  template:
+    metadata:
+      labels:
+        app: servicenow-ticketing-adapter
+
+    spec:
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: servicenow-ticketing-adapter
+
+          # Deliberately non-deployable Phase 5A placeholder.
+          # Replace only after an explicitly authorized image-build phase.
+          image: 753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/network-compliance-ticketing-runtime@sha256:fabae8d19be77629c1824c3d1e1bc7e505fd2545c0abf322e0d8ecae1c18959e
+          imagePullPolicy: IfNotPresent
+
+          command:
+            - python3
+            - /opt/network-compliance-ticketing/scripts/servicenow_ticketing_adapter.py
+
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+
+          envFrom:
+            - configMapRef:
+                name: servicenow-ticketing-runtime-config
+
+            - secretRef:
+                name: servicenow-ticketing-runtime-secret
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

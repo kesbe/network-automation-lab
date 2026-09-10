@@ -63,6 +63,18 @@ class TicketingRuntimeImageContractTests(unittest.TestCase):
             self.text,
         )
 
+    def test_runtime_scripts_are_normalized_readable(self):
+        self.assertIn(
+            "RUN chmod 0644 \\\n"
+            "      /opt/network-compliance-ticketing/scripts/"
+            "ticketing_runtime_common.py \\\n"
+            "      /opt/network-compliance-ticketing/scripts/"
+            "ticketing_lifecycle_publisher.py \\\n"
+            "      /opt/network-compliance-ticketing/scripts/"
+            "zammad_ticketing_adapter.py",
+            self.text,
+        )
+
     def test_workdir_and_pythonpath_are_frozen(self):
         self.assertIn(
             "WORKDIR /opt/network-compliance-ticketing",
