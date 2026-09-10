@@ -112,12 +112,12 @@ class ServiceNowOfflineDeploymentContractTests(
             ],
         )
 
-    def test_deployment_is_non_activated(self):
+    def test_deployment_is_activated(self):
         value = text(DEPLOYMENT)
 
         self.assertRegex(
             value,
-            r"(?m)^\s*replicas:\s*0\s*$",
+            r"(?m)^\s*replicas:\s*1\s*$",
         )
 
     def test_deployment_uses_immutable_servicenow_runtime_image(self):

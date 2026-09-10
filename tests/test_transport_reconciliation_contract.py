@@ -78,7 +78,9 @@ def test_only_failure_terminal_states_are_eligible():
 
     allowed_section = PLAYBOOK.split(
         "safe_previous_workflow_terminal_states:"
-    )[1].split("tasks:")[0]
+    )[1].split(
+        "safe_previous_descendant_terminal_states:"
+    )[0]
 
     assert "successful" not in allowed_section
     assert "running" not in allowed_section
