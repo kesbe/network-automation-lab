@@ -64,16 +64,49 @@ class TicketingRuntimeImageContractTests(unittest.TestCase):
         )
 
     def test_runtime_scripts_are_normalized_readable(self):
-        self.assertIn(
-            "RUN chmod 0644 \\\n"
-            "      /opt/network-compliance-ticketing/scripts/"
-            "ticketing_runtime_common.py \\\n"
-            "      /opt/network-compliance-ticketing/scripts/"
-            "ticketing_lifecycle_publisher.py \\\n"
-            "      /opt/network-compliance-ticketing/scripts/"
-            "zammad_ticketing_adapter.py",
-            self.text,
+        lines = self.text.splitlines()
+
+        chmod_start = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.strip() == "RUN chmod 0644 \\"
+            ),
+            None,
         )
+
+        self.assertIsNotNone(
+            chmod_start,
+            "RUN chmod 0644 block is missing",
+        )
+
+        chmod_lines = []
+
+        for line in lines[chmod_start:]:
+            chmod_lines.append(line)
+
+            if not line.rstrip().endswith("\\"):
+                break
+
+        chmod_block = "\n".join(chmod_lines)
+
+        required = (
+            "ticketing_runtime_common.py",
+            "ticketing_provider.py",
+            "ticketing_lifecycle_publisher.py",
+            "zammad_ticketing_adapter.py",
+            "servicenow_ticketing_adapter.py",
+        )
+
+        for script in required:
+            with self.subTest(script=script):
+                self.assertIn(
+                    (
+                        "/opt/network-compliance-ticketing/"
+                        f"scripts/{script}"
+                    ),
+                    chmod_block,
+                )
 
     def test_workdir_and_pythonpath_are_frozen(self):
         self.assertIn(
