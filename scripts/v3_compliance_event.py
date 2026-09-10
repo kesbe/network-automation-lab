@@ -197,10 +197,17 @@ def _canonical_finding(
             "status NON_COMPLIANT"
         )
 
-    return {
+    result = {
         field: validated[field]
         for field in FINDING_FIELDS
     }
+
+    if validated["ticket_required"]:
+        result["target_providers"] = (
+            validated["target_providers"]
+        )
+
+    return result
 
 
 def _validate_finding_target_binding(

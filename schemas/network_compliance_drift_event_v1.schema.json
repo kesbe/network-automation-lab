@@ -152,8 +152,46 @@
             "minLength": 1
           },
           "observed": {},
-          "expected": {}
-        }
+          "expected": {},
+          "target_providers": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "servicenow",
+                "zammad"
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ticket_required": {
+                  "const": true
+                }
+              },
+              "required": [
+                "ticket_required"
+              ]
+            },
+            "then": {
+              "required": [
+                "target_providers"
+              ]
+            },
+            "else": {
+              "not": {
+                "required": [
+                  "target_providers"
+                ]
+              }
+            }
+          }
+        ]
       }
     }
   }

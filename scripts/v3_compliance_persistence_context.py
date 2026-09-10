@@ -474,6 +474,91 @@ def _canonical_finding(
             "must be boolean"
         )
 
+    raw_target_providers = finding.get(
+        "target_providers"
+    )
+
+    if ticket_required:
+
+        if (
+            not isinstance(
+                raw_target_providers,
+                list,
+            )
+            or not raw_target_providers
+        ):
+            raise PersistenceContextError(
+                "finding.target_providers "
+                "must be a non-empty array "
+                "when ticket_required=true"
+            )
+
+        target_providers = []
+
+        for provider in raw_target_providers:
+
+            if (
+                not isinstance(
+                    provider,
+                    str,
+                )
+                or not provider.strip()
+            ):
+                raise PersistenceContextError(
+                    "finding.target_providers "
+                    "members must be "
+                    "non-empty strings"
+                )
+
+            canonical = (
+                provider
+                .strip()
+                .lower()
+            )
+
+            if canonical not in {
+                "servicenow",
+                "zammad",
+            }:
+                raise PersistenceContextError(
+                    "unsupported target provider: "
+                    + canonical
+                )
+
+            target_providers.append(
+                canonical
+            )
+
+        if (
+            len(
+                set(
+                    target_providers
+                )
+            )
+            != len(
+                target_providers
+            )
+        ):
+            raise PersistenceContextError(
+                "finding.target_providers "
+                "must not contain duplicates"
+            )
+
+        target_providers = sorted(
+            target_providers
+        )
+
+    elif (
+        "target_providers"
+        in finding
+    ):
+
+        raise PersistenceContextError(
+            "finding.target_providers "
+            "must be absent when "
+            "ticket_required=false"
+        )
+
     candidate = {
         "finding_id":
             finding_id,
@@ -511,6 +596,11 @@ def _canonical_finding(
         "ticket_required":
             ticket_required,
     }
+
+    if ticket_required:
+        candidate["target_providers"] = (
+            target_providers
+        )
 
     for field in (
         REMEDIATION_DETAIL_FIELDS_BY_CONTROL.get(

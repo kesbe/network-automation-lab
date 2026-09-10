@@ -191,6 +191,71 @@ def canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+ALLOWED_TICKETING_TARGET_PROVIDERS = frozenset(
+    {
+        "servicenow",
+        "zammad",
+    }
+)
+
+
+def normalize_target_providers(
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, list):
+        raise RuntimeContractError(
+            "event_details.target_providers "
+            "must be an array"
+        )
+
+    if not value:
+        raise RuntimeContractError(
+            "event_details.target_providers "
+            "must not be empty"
+        )
+
+    normalized: list[str] = []
+
+    for provider in value:
+        if (
+            not isinstance(provider, str)
+            or not provider.strip()
+        ):
+            raise RuntimeContractError(
+                "target provider must be "
+                "a non-empty string"
+            )
+
+        provider = (
+            provider
+            .strip()
+            .lower()
+        )
+
+        if (
+            provider
+            not in
+            ALLOWED_TICKETING_TARGET_PROVIDERS
+        ):
+            raise RuntimeContractError(
+                "unsupported target provider: "
+                + provider
+            )
+
+        normalized.append(provider)
+
+    if (
+        len(set(normalized))
+        != len(normalized)
+    ):
+        raise RuntimeContractError(
+            "target_providers must not "
+            "contain duplicates"
+        )
+
+    return sorted(normalized)
+
+
 def normalize_event_row(
     row: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -232,21 +297,122 @@ def normalize_event_row(
 
     finding_id = row["source_finding_id"]
 
-    if not isinstance(finding_id, str) or not finding_id.strip():
+    if (
+        not isinstance(finding_id, str)
+        or not finding_id.strip()
+    ):
         raise RuntimeContractError(
-            "source_finding_id must be a non-empty string"
+            "source_finding_id must be "
+            "a non-empty string"
         )
 
+    raw_event_details = row.get(
+        "event_details"
+    )
+
+    if raw_event_details is None:
+        event_details = {}
+    elif isinstance(
+        raw_event_details,
+        Mapping,
+    ):
+        event_details = dict(
+            raw_event_details
+        )
+    else:
+        raise RuntimeContractError(
+            "event_details must be an object"
+        )
+
+    raw_finding_snapshot = row.get(
+        "finding_snapshot"
+    )
+
+    if raw_finding_snapshot is None:
+        finding_snapshot = {}
+    elif isinstance(
+        raw_finding_snapshot,
+        Mapping,
+    ):
+        finding_snapshot = dict(
+            raw_finding_snapshot
+        )
+    else:
+        raise RuntimeContractError(
+            "finding_snapshot must be an object"
+        )
+
+    routing_required = (
+        finding_snapshot.get(
+            "ticket_required"
+        ) is True
+    )
+
+    raw_targets = event_details.get(
+        "target_providers"
+    )
+
+    if routing_required:
+        if raw_targets is None:
+            raise RuntimeContractError(
+                "ticket lifecycle event requires "
+                "event_details.target_providers"
+            )
+
+        target_providers = (
+            normalize_target_providers(
+                raw_targets
+            )
+        )
+
+        event_details[
+            "target_providers"
+        ] = target_providers
+
+    elif raw_targets is not None:
+        target_providers = (
+            normalize_target_providers(
+                raw_targets
+            )
+        )
+
+        event_details[
+            "target_providers"
+        ] = target_providers
+
+    else:
+        target_providers = []
+
     result = {
-        "source_event_id": source_event_id,
-        "finding_id": finding_id.strip(),
-        "run_id": row.get("run_id"),
-        "lifecycle_event_type": event_type,
-        "event_time": row.get("event_time"),
-        "old_status": row.get("old_status"),
-        "new_status": row.get("new_status"),
-        "event_details": row.get("event_details") or {},
-        "finding_snapshot": row.get("finding_snapshot") or {},
+        "source_event_id":
+            source_event_id,
+
+        "finding_id":
+            finding_id.strip(),
+
+        "run_id":
+            row.get("run_id"),
+
+        "lifecycle_event_type":
+            event_type,
+
+        "event_time":
+            row.get("event_time"),
+
+        "old_status":
+            row.get("old_status"),
+
+        "new_status":
+            row.get("new_status"),
+
+        "event_details":
+            event_details,
+
+        "finding_snapshot":
+            finding_snapshot,
+
+        "target_providers":
+            target_providers,
     }
 
     return result
@@ -302,6 +468,19 @@ def claim_is_acquired(result: Any) -> bool:
 def require_claim_disposition(
     result: Any,
 ) -> str:
+
+    if isinstance(result, Mapping):
+        raw_state = result.get("state")
+        if isinstance(raw_state, str) and raw_state.strip().upper() == "SKIPPED":
+            return "SKIPPED"
+
+        raw_status = result.get("claim_status")
+        if isinstance(raw_status, str) and raw_status.strip().upper() in {
+            "ALREADY_SKIPPED",
+            "DUPLICATE_SKIPPED",
+        }:
+            return "SKIPPED"
+
     if claim_is_completed(result):
         return "COMPLETED"
 

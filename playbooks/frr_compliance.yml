@@ -246,6 +246,17 @@
                   },
                   recursive=True
                 )
+              | combine(
+                  (
+                    {
+                      'target_providers':
+                        policy_entry.value.target_providers
+                    }
+                    if policy_entry.value.ticket_required
+                    else {}
+                  ),
+                  recursive=True
+                )
             ]
           }}
       vars:

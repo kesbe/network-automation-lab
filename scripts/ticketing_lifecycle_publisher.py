@@ -280,6 +280,9 @@ class LifecyclePublisher:
             claim
         )
 
+        if disposition == "SKIPPED":
+            return "ALREADY_SKIPPED"
+
         if disposition == "COMPLETED":
             return "ALREADY_COMPLETED"
 
@@ -326,6 +329,7 @@ class LifecyclePublisher:
             "read": 0,
             "completed": 0,
             "already_completed": 0,
+            "already_skipped": 0,
             "busy": 0,
             "failed": 0,
         }
@@ -349,6 +353,9 @@ class LifecyclePublisher:
 
                 elif result == "ALREADY_COMPLETED":
                     counters["already_completed"] += 1
+
+                elif result == "ALREADY_SKIPPED":
+                    counters["already_skipped"] += 1
 
                 elif result == "BUSY":
                     counters["busy"] += 1

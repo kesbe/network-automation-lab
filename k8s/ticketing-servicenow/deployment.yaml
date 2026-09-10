@@ -39,7 +39,7 @@ spec:
 
           # Deliberately non-deployable Phase 5A placeholder.
           # Replace only after an explicitly authorized image-build phase.
-          image: example.invalid/network-compliance/ticketing-runtime:phase5a-unbuilt
+          image: 753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/network-compliance-ticketing-runtime@sha256:fabae8d19be77629c1824c3d1e1bc7e505fd2545c0abf322e0d8ecae1c18959e
           imagePullPolicy: IfNotPresent
 
           command:

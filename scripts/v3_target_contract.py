@@ -423,6 +423,91 @@ def validate_finding(
         ticket_required
     )
 
+    raw_target_providers = finding.get(
+        "target_providers"
+    )
+
+    if ticket_required:
+
+        if (
+            not isinstance(
+                raw_target_providers,
+                list,
+            )
+            or not raw_target_providers
+        ):
+            raise V3ContractError(
+                "target_providers must be "
+                "a non-empty array when "
+                "ticket_required=true"
+            )
+
+        target_providers = []
+
+        for provider in raw_target_providers:
+
+            if (
+                not isinstance(
+                    provider,
+                    str,
+                )
+                or not provider.strip()
+            ):
+                raise V3ContractError(
+                    "target_providers members "
+                    "must be non-empty strings"
+                )
+
+            canonical = (
+                provider
+                .strip()
+                .lower()
+            )
+
+            if canonical not in {
+                "servicenow",
+                "zammad",
+            }:
+                raise V3ContractError(
+                    "unsupported target provider: "
+                    + canonical
+                )
+
+            target_providers.append(
+                canonical
+            )
+
+        if (
+            len(
+                set(
+                    target_providers
+                )
+            )
+            != len(
+                target_providers
+            )
+        ):
+            raise V3ContractError(
+                "target_providers must not "
+                "contain duplicates"
+            )
+
+        result[
+            "target_providers"
+        ] = sorted(
+            target_providers
+        )
+
+    elif (
+        "target_providers"
+        in finding
+    ):
+
+        raise V3ContractError(
+            "target_providers must be absent "
+            "when ticket_required=false"
+        )
+
     if (
         result["remediation_policy"]
         == "approval_required"

@@ -4,11 +4,11 @@ metadata:
   name: servicenow-ticketing-runtime-config
   namespace: network-compliance-ticketing
 data:
-  TICKETING_DB_HOST: "REPLACE_WITH_DB_HOST"
+  TICKETING_DB_HOST: "postgresql.compliance-db.svc"
   TICKETING_DB_PORT: "5432"
-  TICKETING_DB_NAME: "REPLACE_WITH_DB_NAME"
+  TICKETING_DB_NAME: "network_compliance"
 
-  TICKETING_KAFKA_BOOTSTRAP_SERVERS: "REPLACE_WITH_KAFKA_BOOTSTRAP_SERVERS"
+  TICKETING_KAFKA_BOOTSTRAP_SERVERS: "network-automation-kafka-kafka-bootstrap.kafka.svc:9092"
   TICKETING_LIFECYCLE_TOPIC: "network.compliance.lifecycle.events"
 
   TICKETING_SERVICENOW_CONSUMER_GROUP: "servicenow-network-compliance-production-v1"

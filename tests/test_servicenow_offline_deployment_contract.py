@@ -120,14 +120,15 @@ class ServiceNowOfflineDeploymentContractTests(
             r"(?m)^\s*replicas:\s*0\s*$",
         )
 
-    def test_deployment_uses_unbuilt_image_placeholder(self):
+    def test_deployment_uses_immutable_servicenow_runtime_image(self):
         value = text(DEPLOYMENT)
 
         self.assertIn(
             (
                 "image: "
-                "example.invalid/network-compliance/"
-                "ticketing-runtime:phase5a-unbuilt"
+                "753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/"
+                "network-compliance-ticketing-runtime@"
+                "sha256:fabae8d19be77629c1824c3d1e1bc7e505fd2545c0abf322e0d8ecae1c18959e"
             ),
             value,
         )

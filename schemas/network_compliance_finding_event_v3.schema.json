@@ -103,6 +103,18 @@
         },
         "ticket_required": {
           "type": "boolean"
+        },
+        "target_providers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "servicenow",
+              "zammad"
+            ]
+          }
         }
       },
       "additionalProperties": true,
@@ -146,6 +158,30 @@
                   "blocked"
                 ]
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ticket_required": {
+                "const": true
+              }
+            },
+            "required": [
+              "ticket_required"
+            ]
+          },
+          "then": {
+            "required": [
+              "target_providers"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "target_providers"
+              ]
             }
           }
         }

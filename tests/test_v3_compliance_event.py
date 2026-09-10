@@ -489,6 +489,7 @@ class V3ComplianceEventTests(
         )
 
         finding["ticket_required"] = False
+        finding.pop("target_providers", None)
 
         with self.assertRaises(
             V3ContractError

@@ -227,6 +227,7 @@ class V3TargetContractTests(
             "remediable": False,
             "remediation_policy": "auto",
             "ticket_required": True,
+            "target_providers": ["servicenow"],
         }
 
         with self.assertRaises(
