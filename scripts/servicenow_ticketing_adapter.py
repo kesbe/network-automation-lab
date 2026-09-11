@@ -616,6 +616,724 @@ class ServiceNowIncidentProvider:
                     ),
             },
         )
+
+# ============================================================================
+# ServiceNow network provisioning Change Request provider
+# ============================================================================
+
+
+CHANGE_REQUEST_API_PATH = (
+    "/api/sn_chg_rest/change"
+)
+
+
+@dataclass(frozen=True)
+class ServiceNowChangeConfig:
+    """
+    Offline/runtime contract for provisioning Change Requests.
+
+    The Change Management API recommends specifying either a
+    change model or a type.  For the provisioning PoC the
+    default is a normal change.
+    """
+
+    base_url: str
+
+    change_type: Optional[str] = (
+        "normal"
+    )
+
+    change_model: Optional[str] = None
+
+    assignment_group: Optional[str] = None
+
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        if (
+            not isinstance(
+                self.base_url,
+                str,
+            )
+            or not self.base_url.strip()
+        ):
+
+            raise RuntimeContractError(
+                "ServiceNow Change base_url "
+                "must not be empty"
+            )
+
+
+        if self.change_type is not None:
+
+            if (
+                not isinstance(
+                    self.change_type,
+                    str,
+                )
+                or not self.change_type.strip()
+            ):
+
+                raise RuntimeContractError(
+                    "ServiceNow Change type "
+                    "must be a non-empty string "
+                    "or None"
+                )
+
+
+        if self.change_model is not None:
+
+            if (
+                not isinstance(
+                    self.change_model,
+                    str,
+                )
+                or not self.change_model.strip()
+            ):
+
+                raise RuntimeContractError(
+                    "ServiceNow Change model "
+                    "must be a non-empty string "
+                    "or None"
+                )
+
+
+        if (
+            self.change_type is None
+            and self.change_model is None
+        ):
+
+            raise RuntimeContractError(
+                "ServiceNow Change requires "
+                "change_type or change_model"
+            )
+
+
+@dataclass(frozen=True)
+class ServiceNowChangeRequest:
+    """
+    Minimal identity returned after Change creation.
+    """
+
+    sys_id: str
+    number: str
+    state: Optional[str]
+    approval: Optional[str]
+    raw: dict[str, Any]
+
+
+class ServiceNowChangeProvider:
+    """
+    ServiceNow Change Management API provider.
+
+    This provider is intentionally independent from the
+    existing incident provider.  SN-PROV-2 only introduces
+    offline Change creation capability.
+    """
+
+    def __init__(
+        self,
+        config: ServiceNowChangeConfig,
+        headers: Mapping[str, str],
+        transport: Optional[
+            JsonTransport
+        ] = None,
+    ) -> None:
+
+        self.config=config
+
+        self.headers=dict(
+            headers
+        )
+
+        self.transport=(
+            transport
+            if transport is not None
+            else UrllibJsonTransport()
+        )
+
+
+    @property
+    def endpoint(
+        self,
+    ) -> str:
+
+        return (
+            self.config.base_url.rstrip("/")
+            + CHANGE_REQUEST_API_PATH
+        )
+
+
+    def _headers(
+        self,
+    ) -> dict[str,str]:
+
+        result={
+            "Accept":
+                "application/json",
+
+            "Content-Type":
+                "application/json",
+        }
+
+        result.update(
+            self.headers
+        )
+
+        return result
+
+
+    @staticmethod
+    def _result_mapping(
+        payload: Mapping[str,Any],
+    ) -> dict[str,Any]:
+
+        value=payload.get(
+            "result"
+        )
+
+        if not isinstance(
+            value,
+            Mapping,
+        ):
+
+            raise RuntimeContractError(
+                "ServiceNow Change response "
+                "does not contain a result object"
+            )
+
+        return dict(value)
+
+
+    @staticmethod
+    def _field_value(
+        value: Any,
+    ) -> Any:
+        """
+        Change Management API fields can be returned either
+        as plain values or as objects containing value and
+        display_value.
+        """
+
+        if isinstance(
+            value,
+            Mapping,
+        ):
+
+            if "value" in value:
+
+                return value.get(
+                    "value"
+                )
+
+        return value
+
+
+    @classmethod
+    def _required_result_text(
+        cls,
+        result: Mapping[str,Any],
+        field: str,
+    ) -> str:
+
+        value=cls._field_value(
+            result.get(field)
+        )
+
+        if (
+            value is None
+            or str(value).strip()==""
+        ):
+
+            raise RuntimeContractError(
+                "ServiceNow Change has no "
+                +field
+            )
+
+        return str(value)
+
+
+    @classmethod
+    def _optional_result_text(
+        cls,
+        result: Mapping[str,Any],
+        field: str,
+    ) -> Optional[str]:
+
+        value=cls._field_value(
+            result.get(field)
+        )
+
+        if (
+            value is None
+            or str(value).strip()==""
+        ):
+
+            return None
+
+        return str(value)
+
+
+    @classmethod
+    def _change_request(
+        cls,
+        result: Mapping[str,Any],
+    ) -> ServiceNowChangeRequest:
+
+        return ServiceNowChangeRequest(
+            sys_id=
+                cls._required_result_text(
+                    result,
+                    "sys_id",
+                ),
+
+            number=
+                cls._required_result_text(
+                    result,
+                    "number",
+                ),
+
+            state=
+                cls._optional_result_text(
+                    result,
+                    "state",
+                ),
+
+            approval=
+                cls._optional_result_text(
+                    result,
+                    "approval",
+                ),
+
+            raw=dict(result),
+        )
+
+
+    def get_change(
+        self,
+        sys_id: str,
+    ) -> ServiceNowChangeRequest:
+        """
+        Retrieve one Change Request by ServiceNow sys_id.
+
+        This is a read-only operation and performs no
+        approval action or NetBox writeback.
+        """
+
+        if (
+            not isinstance(
+                sys_id,
+                str,
+            )
+            or not sys_id.strip()
+        ):
+
+            raise RuntimeContractError(
+                "ServiceNow Change sys_id "
+                "must not be empty"
+            )
+
+
+        result=self.transport.request(
+            "GET",
+
+            self.endpoint
+            +"/"
+            +urllib.parse.quote(
+                sys_id.strip(),
+                safe="",
+            ),
+
+            self._headers(),
+        )
+
+
+        return self._change_request(
+            self._result_mapping(
+                result
+            )
+        )
+
+
+    @classmethod
+    def approval_state(
+        cls,
+        change: ServiceNowChangeRequest,
+    ) -> str:
+        """
+        Normalize ServiceNow Change approval state.
+
+        Fail-closed contract:
+
+        approved
+            terminal approval
+
+        rejected
+            terminal rejection
+
+        requested
+            non-terminal
+
+        not_requested
+            non-terminal
+
+        unknown
+            non-terminal and never authorizes provisioning
+        """
+
+        if not isinstance(
+            change,
+            ServiceNowChangeRequest,
+        ):
+
+            raise RuntimeContractError(
+                "change must be a "
+                "ServiceNowChangeRequest"
+            )
+
+
+        value=change.approval
+
+
+        if value is None:
+
+            return "unknown"
+
+
+        normalized=(
+            str(value)
+            .strip()
+            .lower()
+            .replace("_"," ")
+            .replace("-"," ")
+        )
+
+
+        normalized=" ".join(
+            normalized.split()
+        )
+
+
+        if normalized=="approved":
+
+            return "approved"
+
+
+        if normalized=="rejected":
+
+            return "rejected"
+
+
+        if normalized=="requested":
+
+            return "requested"
+
+
+        if normalized in {
+            "not requested",
+            "not yet requested",
+        }:
+
+            return "not_requested"
+
+
+        return "unknown"
+
+
+    @staticmethod
+    def _required_text(
+        intent: Mapping[str,Any],
+        name: str,
+    ) -> str:
+
+        value=intent.get(
+            name
+        )
+
+        if (
+            not isinstance(
+                value,
+                str,
+            )
+            or not value.strip()
+        ):
+
+            raise RuntimeContractError(
+                name
+                +" must not be empty"
+            )
+
+        return value.strip()
+
+
+    @staticmethod
+    def _required_positive_int(
+        intent: Mapping[str,Any],
+        name: str,
+    ) -> int:
+
+        value=intent.get(
+            name
+        )
+
+        if (
+            isinstance(
+                value,
+                bool,
+            )
+            or not isinstance(
+                value,
+                int,
+            )
+            or value <= 0
+        ):
+
+            raise RuntimeContractError(
+                name
+                +" must be a positive integer"
+            )
+
+        return value
+
+
+    @staticmethod
+    def _optional_text(
+        intent: Mapping[str,Any],
+        name: str,
+    ) -> Optional[str]:
+
+        value=intent.get(
+            name
+        )
+
+        if value is None:
+
+            return None
+
+        if not isinstance(
+            value,
+            str,
+        ):
+
+            raise RuntimeContractError(
+                name
+                +" must be a string"
+            )
+
+        value=value.strip()
+
+        return value or None
+
+
+    def create_change(
+        self,
+        intent: Mapping[str,Any],
+    ) -> ServiceNowChangeRequest:
+        """
+        Create one network provisioning Change Request.
+
+        This method performs no NetBox writeback and no
+        approval processing.  Those are later SN-PROV
+        phases.
+        """
+
+        device_name=(
+            self._required_text(
+                intent,
+                "device_name",
+            )
+        )
+
+        management_ip=(
+            self._required_text(
+                intent,
+                "management_ip",
+            )
+        )
+
+        role=(
+            self._required_text(
+                intent,
+                "role",
+            )
+        )
+
+        platform=(
+            self._required_text(
+                intent,
+                "platform",
+            )
+        )
+
+        bgp_asn=(
+            self._required_positive_int(
+                intent,
+                "bgp_asn",
+            )
+        )
+
+        router_id=(
+            self._required_text(
+                intent,
+                "router_id",
+            )
+        )
+
+
+        short_description=(
+            self._optional_text(
+                intent,
+                "short_description",
+            )
+            or (
+                "Provision network device "
+                +device_name
+            )
+        )
+
+
+        description=(
+            self._optional_text(
+                intent,
+                "description",
+            )
+        )
+
+        if description is None:
+
+            description=json.dumps(
+                {
+                    "automation":
+                        "netbox-eda-awx",
+
+                    "device_name":
+                        device_name,
+
+                    "management_ip":
+                        management_ip,
+
+                    "role":
+                        role,
+
+                    "platform":
+                        platform,
+
+                    "bgp_asn":
+                        bgp_asn,
+
+                    "router_id":
+                        router_id,
+                },
+                sort_keys=True,
+            )
+
+
+        implementation_plan=(
+            self._optional_text(
+                intent,
+                "implementation_plan",
+            )
+            or (
+                "Provision "
+                +device_name
+                +" using the approved "
+                "NetBox -> EDA -> AWX "
+                "network automation workflow."
+            )
+        )
+
+
+        test_plan=(
+            self._optional_text(
+                intent,
+                "test_plan",
+            )
+            or (
+                "Verify management reachability, "
+                "BGP ASN "
+                +str(bgp_asn)
+                +", and router ID "
+                +router_id
+                +" after provisioning."
+            )
+        )
+
+
+        backout_plan=(
+            self._optional_text(
+                intent,
+                "backout_plan",
+            )
+            or (
+                "Return "
+                +device_name
+                +" to its pre-provisioning "
+                "configuration if automated "
+                "verification fails."
+            )
+        )
+
+
+        payload: dict[str,Any]={
+
+            "short_description":
+                short_description,
+
+            "description":
+                description,
+
+            "implementation_plan":
+                implementation_plan,
+
+            "test_plan":
+                test_plan,
+
+            "backout_plan":
+                backout_plan,
+        }
+
+
+        if self.config.change_type:
+
+            payload[
+                "type"
+            ]=self.config.change_type
+
+
+        if self.config.change_model:
+
+            payload[
+                "chg_model"
+            ]=self.config.change_model
+
+
+        if self.config.assignment_group:
+
+            payload[
+                "assignment_group"
+            ]=(
+                self.config
+                    .assignment_group
+            )
+
+
+        result=self.transport.request(
+            "POST",
+            self.endpoint,
+            self._headers(),
+            payload,
+        )
+
+
+        return self._change_request(
+            self._result_mapping(
+                result
+            )
+        )
+
+
 # ============================================================================
 # ServiceNow runtime orchestration
 # ============================================================================
