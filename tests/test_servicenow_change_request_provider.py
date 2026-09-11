@@ -736,5 +736,307 @@ class ServiceNowChangeProviderTests(
         )
 
 
+    def _make_change_result_provider(
+        self,
+        response=None,
+    ):
+        class RecordingTransport:
+            def __init__(
+                self,
+                response,
+            ):
+                self.response = response
+                self.calls = []
+
+            def request(
+                self,
+                method,
+                url,
+                headers,
+                payload,
+            ):
+                self.calls.append(
+                    (
+                        method,
+                        url,
+                        headers,
+                        payload,
+                    )
+                )
+
+                return self.response
+
+        if response is None:
+            response = {
+                "transport":
+                    "response",
+            }
+
+        transport = RecordingTransport(
+            response
+        )
+
+        provider = ServiceNowChangeProvider(
+            config(),
+            {},
+            transport,
+        )
+
+        return (
+            provider,
+            transport,
+        )
+
+    def test_update_change_result_work_notes_only(
+        self,
+    ):
+        import json
+
+        provider,transport = (
+            self._make_change_result_provider()
+        )
+
+        provider._result_mapping = (
+            lambda response:
+            {
+                "mapped":
+                    response,
+            }
+        )
+
+        provider._change_request = (
+            lambda result:
+            result
+        )
+
+        result = provider.update_change_result(
+            "abc/def",
+            "  provisioning successful  ",
+        )
+
+        self.assertEqual(
+            len(transport.calls),
+            1,
+        )
+
+        (
+            method,
+            url,
+            headers,
+            payload,
+        ) = transport.calls[0]
+
+        self.assertEqual(
+            method,
+            "PATCH",
+        )
+
+        self.assertTrue(
+            url.endswith(
+                "/abc%2Fdef"
+            )
+        )
+
+        self.assertIsInstance(
+            headers,
+            dict,
+        )
+
+        self.assertEqual(
+            json.loads(
+                payload.decode(
+                    "utf-8"
+                )
+            ),
+            {
+                "work_notes":
+                    "provisioning successful",
+            },
+        )
+
+        self.assertNotIn(
+            "state",
+            json.loads(
+                payload.decode(
+                    "utf-8"
+                )
+            ),
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "mapped":
+                    {
+                        "transport":
+                            "response",
+                    },
+            },
+        )
+
+    def test_update_change_result_explicit_state(
+        self,
+    ):
+        import json
+
+        provider,transport = (
+            self._make_change_result_provider()
+        )
+
+        provider._result_mapping = (
+            lambda response:
+            {
+                "mapped":
+                    response,
+            }
+        )
+
+        provider._change_request = (
+            lambda result:
+            result
+        )
+
+        provider.update_change_result(
+            "abc123",
+            "completed",
+            state="CALLER_SUPPLIED_STATE",
+        )
+
+        self.assertEqual(
+            len(transport.calls),
+            1,
+        )
+
+        payload=json.loads(
+            transport.calls[0][3].decode(
+                "utf-8"
+            )
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "work_notes":
+                    "completed",
+
+                "state":
+                    "CALLER_SUPPLIED_STATE",
+            },
+        )
+
+    def test_update_change_result_rejects_empty_sys_id_without_call(
+        self,
+    ):
+        provider,transport = (
+            self._make_change_result_provider()
+        )
+
+        with self.assertRaises(
+            RuntimeContractError
+        ):
+            provider.update_change_result(
+                "   ",
+                "completed",
+            )
+
+        self.assertEqual(
+            transport.calls,
+            [],
+        )
+
+    def test_update_change_result_rejects_empty_work_notes_without_call(
+        self,
+    ):
+        provider,transport = (
+            self._make_change_result_provider()
+        )
+
+        with self.assertRaises(
+            RuntimeContractError
+        ):
+            provider.update_change_result(
+                "abc123",
+                "   ",
+            )
+
+        self.assertEqual(
+            transport.calls,
+            [],
+        )
+
+    def test_update_change_result_maps_response(
+        self,
+    ):
+        response={
+            "raw":
+                "response",
+        }
+
+        provider,transport = (
+            self._make_change_result_provider(
+                response=response
+            )
+        )
+
+        seen={}
+
+        def result_mapping(value):
+            seen[
+                "result_mapping_input"
+            ]=value
+
+            return {
+                "mapped":
+                    True,
+            }
+
+        def change_request(value):
+            seen[
+                "change_request_input"
+            ]=value
+
+            return "parsed-change"
+
+        provider._result_mapping = (
+            result_mapping
+        )
+
+        provider._change_request = (
+            change_request
+        )
+
+        result=provider.update_change_result(
+            "abc123",
+            "completed",
+        )
+
+        self.assertEqual(
+            len(transport.calls),
+            1,
+        )
+
+        self.assertIs(
+            seen[
+                "result_mapping_input"
+            ],
+            response,
+        )
+
+        self.assertEqual(
+            seen[
+                "change_request_input"
+            ],
+            {
+                "mapped":
+                    True,
+            },
+        )
+
+        self.assertEqual(
+            result,
+            "parsed-change",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1334,6 +1334,57 @@ class ServiceNowChangeProvider:
         )
 
 
+    def update_change_result(
+        self,
+        sys_id,
+        work_notes,
+        state=None,
+    ):
+        if not isinstance(sys_id, str) or not sys_id.strip():
+            raise RuntimeContractError(
+                "ServiceNow Change sys_id must not be empty"
+            )
+
+        if (
+            not isinstance(work_notes, str)
+            or not work_notes.strip()
+        ):
+            raise RuntimeContractError(
+                "ServiceNow Change work_notes must not be empty"
+            )
+
+        payload = {
+            "work_notes": work_notes.strip(),
+        }
+
+        if state is not None:
+            payload["state"] = state
+
+        endpoint = (
+            self.endpoint
+            + "/"
+            + urllib.parse.quote(
+                sys_id.strip(),
+                safe="",
+            )
+        )
+
+        response = self.transport.request(
+            "PATCH",
+            endpoint,
+            self._headers(),
+            json.dumps(payload).encode("utf-8"),
+        )
+
+        result = self._result_mapping(
+            response
+        )
+
+        return self._change_request(
+            result
+        )
+
+
 # ============================================================================
 # ServiceNow runtime orchestration
 # ============================================================================
