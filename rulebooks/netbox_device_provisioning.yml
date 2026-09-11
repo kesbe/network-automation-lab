@@ -18,6 +18,7 @@
         event.payload.event_type ==
         "NETBOX_DEVICE_PROVISION_READY"
         and event.payload.provisioning_ready == true
+        and event.payload.provisioning_approved == true
         and event.payload.previous_provisioning_ready != true
         and event.payload.role == "router"
         and event.payload.platform == "frr"
