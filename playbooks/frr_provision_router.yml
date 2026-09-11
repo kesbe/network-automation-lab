@@ -1,0 +1,96 @@
+---
+- name: Provision FRR router baseline
+  hosts: all
+  gather_facts: false
+
+  vars:
+    baseline_profile: router-frr-v1
+    baseline_bgp_asn: 65103
+    baseline_router_id: 10.255.3.1
+
+  tasks:
+    - name: Validate provisioning request
+      ansible.builtin.assert:
+        that:
+          - provision_device is defined
+          - provision_device | length > 0
+          - inventory_hostname == provision_device
+          - role == "router"
+          - platform == "frr"
+          - ansible_host is defined
+        fail_msg: >-
+          Provisioning request does not match the NetBox-derived
+          router inventory identity.
+
+    - name: Capture pre-provisioning FRR configuration
+      ansible.builtin.raw: >
+        vtysh -c "show running-config"
+      register: pre_config
+      changed_when: false
+
+    - name: Determine whether router baseline requires change
+      ansible.builtin.set_fact:
+        baseline_needs_change: >-
+          {{
+            (
+              "router bgp " ~
+              (baseline_bgp_asn | string)
+            ) not in pre_config.stdout
+            or
+            (
+              "bgp router-id " ~
+              baseline_router_id
+            ) not in pre_config.stdout
+          }}
+
+    - name: Apply FRR router baseline
+      ansible.builtin.raw: >-
+        vtysh
+        -c "configure terminal"
+        -c "router bgp {{ baseline_bgp_asn }}"
+        -c "bgp router-id {{ baseline_router_id }}"
+        -c "end"
+        -c "write memory"
+      register: baseline_apply
+      changed_when: true
+      when: baseline_needs_change | bool
+
+    - name: Capture post-provisioning FRR configuration
+      ansible.builtin.raw: >
+        vtysh -c "show running-config"
+      register: post_config
+      changed_when: false
+
+    - name: Verify FRR router baseline
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              "router bgp " ~
+              (baseline_bgp_asn | string)
+            ) in post_config.stdout
+          - >-
+            (
+              "bgp router-id " ~
+              baseline_router_id
+            ) in post_config.stdout
+        fail_msg: >-
+          FRR router baseline did not converge to the requested state.
+
+    - name: Publish provisioning result
+      ansible.builtin.set_stats:
+        data:
+          provisioning_device: "{{ inventory_hostname }}"
+          provisioning_profile: "{{ baseline_profile }}"
+          provisioning_bgp_asn: "{{ baseline_bgp_asn }}"
+          provisioning_router_id: "{{ baseline_router_id }}"
+          provisioning_changed: "{{ baseline_needs_change | bool }}"
+
+    - name: Display provisioning result
+      ansible.builtin.debug:
+        msg:
+          - "device={{ inventory_hostname }}"
+          - "profile={{ baseline_profile }}"
+          - "changed={{ baseline_needs_change | bool }}"
+          - "bgp_asn={{ baseline_bgp_asn }}"
+          - "router_id={{ baseline_router_id }}"
