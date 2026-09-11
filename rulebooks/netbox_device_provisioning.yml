@@ -1,0 +1,49 @@
+---
+- name: NetBox Device Provisioning
+  hosts: localhost
+
+  sources:
+    # This named placeholder is intentionally inert.
+    #
+    # When the native EDA Event Stream activation is created,
+    # source_mappings will replace this source with the internal
+    # Event Stream pg_listener source.
+    - name: netbox_device_events
+      ansible.eda.range:
+        limit: 0
+
+  rules:
+    - name: Launch NetBox FRR router provisioning workflow
+      condition: >
+        event.payload.event_type ==
+        "NETBOX_DEVICE_PROVISION_READY"
+        and event.payload.provisioning_ready == true
+        and event.payload.previous_provisioning_ready != true
+        and event.payload.role == "router"
+        and event.payload.platform == "frr"
+        and event.payload.device_name != ""
+        and event.payload.bgp_asn > 0
+        and event.payload.router_id != ""
+
+      action:
+        run_workflow_template:
+          name: "FT-PROV - NetBox Device Provisioning"
+          organization: "Default"
+
+          include_events: false
+
+          job_args:
+            limit: "{{ event.payload.device_name }}"
+
+            extra_vars:
+              provision_device: "{{ event.payload.device_name }}"
+              baseline_bgp_asn: "{{ event.payload.bgp_asn }}"
+              baseline_router_id: "{{ event.payload.router_id }}"
+
+          retry: false
+          retries: 0
+          delay: 0
+
+          set_facts: false
+          post_events: false
+          add_event_uuid_label: false
