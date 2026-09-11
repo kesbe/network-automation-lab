@@ -128,7 +128,7 @@ class ServiceNowOfflineDeploymentContractTests(
                 "image: "
                 "753240965685.dkr.ecr.ap-southeast-2.amazonaws.com/"
                 "network-compliance-ticketing-runtime@"
-                "sha256:fabae8d19be77629c1824c3d1e1bc7e505fd2545c0abf322e0d8ecae1c18959e"
+                "sha256:2e0354138c4a1c4da059e62cdbfe351c395a8e7b83fdd8ad974419a4e7e76b5a"
             ),
             value,
         )
